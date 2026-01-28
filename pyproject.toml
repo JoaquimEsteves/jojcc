@@ -1,0 +1,39 @@
+[project]
+name = "jojcc"
+version = "0.1.0"
+description = "Joaquim's Own Jank C Compiler"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = [
+    "chapter1",
+    "ipython>=9.9.0",
+    "ruff>=0.14.14",
+]
+
+[project.optional-dependencies]
+# LSP used.
+# Basedpyright is `based` unlike the _cringe_ pyright
+# I install basedpyright globally using npm, but it's available as a standard pypi package.
+lsp = [
+    "basedpyright>=1.37.2",
+]
+
+[tool.uv.workspace]
+members = [
+    "chapter1",
+]
+
+[tool.uv.sources]
+chapter1 = { workspace = true }
+
+[tool.ruff]
+extend-exclude = [
+    # External code yo
+    "writing-a-c-compiler-tests",
+]
+
+[tool.pyright]
+exclude = [
+    '**/.venv',
+    'writing-a-c-compiler-tests/'
+]
