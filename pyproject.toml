@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "chapter1",
+    "shared",
     # ipython is not _strickly_ necessary
     # But trust on this one - you shan't be able to live without `pdb`
     "ipython",
@@ -29,6 +30,7 @@ members = [
 
 [tool.uv.sources]
 chapter1 = { workspace = true }
+shared = { workspace = true }
 
 [tool.ruff]
 extend-exclude = [

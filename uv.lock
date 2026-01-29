@@ -125,6 +125,7 @@ dependencies = [
     { name = "ipython" },
     { name = "pydantic" },
     { name = "ruff" },
+    { name = "shared" },
 ]
 
 [package.optional-dependencies]
@@ -139,6 +140,7 @@ requires-dist = [
     { name = "ipython" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "ruff", specifier = ">=0.14.14" },
+    { name = "shared", editable = "shared" },
 ]
 provides-extras = ["lsp"]
 
