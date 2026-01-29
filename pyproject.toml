@@ -6,7 +6,10 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "chapter1",
-    "ipython>=9.9.0",
+    # ipython is not _strickly_ necessary
+    # But trust on this one - you shan't be able to live without `pdb`
+    "ipython",
+    "pydantic>=2.12.5",
     "ruff>=0.14.14",
 ]
 
@@ -21,6 +24,7 @@ lsp = [
 [tool.uv.workspace]
 members = [
     "chapter1",
+    "shared",
 ]
 
 [tool.uv.sources]

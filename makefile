@@ -17,7 +17,7 @@ lint: $(HAS_INSTALLED)
 .PHONY: lint
 
 
-test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_1_lexer
+test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_1_lexer $(MAKE_CACHE)/chapter_1_parser
 	$(PYRIGHT) .
 .PHONY: test
 
@@ -25,6 +25,11 @@ test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_1_lexer
 chapter_1_lexer $(MAKE_CACHE)/chapter_1_lexer: chapter1/src/* | $(MAKE_CACHE)
 	$(TEST_PROG) chapter1/src/chapter1/compiler_driver.py --chapter 1 --stage lex
 	touch $(MAKE_CACHE)/chapter_1_lexer
+.PHONY: chapter_1_lexer
+
+chapter_1_parser $(MAKE_CACHE)/chapter_1_parser: chapter1/src/* | $(MAKE_CACHE)
+	$(TEST_PROG) chapter1/src/chapter1/compiler_driver.py --chapter 1 --stage parse
+	touch $(MAKE_CACHE)/chapter_1_parser
 .PHONY: chapter_1_lexer
 
 format: $(HAS_INSTALLED)
@@ -43,4 +48,4 @@ clean:
 
 
 $(MAKE_CACHE):
-	mkdir $(MAKE_CACHE)
+	mkdir --parents $(MAKE_CACHE)

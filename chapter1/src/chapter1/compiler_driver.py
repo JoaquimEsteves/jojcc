@@ -1,27 +1,14 @@
 #!/usr/bin/env -S uv run
 import typing as t
-from contextvars import ContextVar
 from pathlib import Path
 import argparse
-import os
 import re
 import subprocess
 from textwrap import dedent
 
 from chapter1.lexer import lex
-
-
-DEBUG = ContextVar(
-    "DEBUG", default=os.environ.get("DEBUG", "false").lower in ("true", "t")
-)
-COMPILER = ContextVar("Compiler", default=os.environ.get("COMPILER", "gcc"))
-"""
-It's a context var that defaults to the env-variable or gcc
-
-
-It's a context var just in case there's a weird command that works only for gcc
-but not clang or whatever
-"""
+import chapter1.parser as parser
+from shared import data_types as dt
 
 
 class PreProcessed(Path):
@@ -42,7 +29,7 @@ def preprocess(input_file: Path) -> PreProcessed:
     output_file = _file_extensions(input_file, ".c$", "i")
 
     _ = subprocess.run(
-        [COMPILER.get(), "-E", "-P", str(input_file), "-o", str(output_file)],
+        [dt.COMPILER.get(), "-E", "-P", str(input_file), "-o", str(output_file)],
         check=True,
     )
 
@@ -65,7 +52,7 @@ def link(ass: Ass) -> Elf:
     # Traditionally PREPROCESSED_FILES have the `.i` extension
     output_file = _file_extensions(ass, ".s$", "")
     _ = subprocess.run(
-        [COMPILER.get(), "-E", "-P", str(ass), "-o", str(output_file)],
+        [dt.COMPILER.get(), "-E", "-P", str(ass), "-o", str(output_file)],
         check=True,
     )
     assert output_file.exists(), "What happened yo?"
@@ -136,22 +123,16 @@ def _arg_parse():
     )
 
 
-type Token = str
-type Lexed = list[Token]
 type AST = list[str]
 
 
-def lexer(input: Path) -> tuple[PreProcessed, Lexed]:
+def lexer(input: Path):
     pre = preprocess(input)
     with open(pre, "r") as f:
         return pre, lex(f.read())
 
 
-def parser(_lexed: Lexed) -> AST:
-    return [""]
-
-
-def assembly_generation(_ast: AST) -> str:
+def assembly_generation(_ast: parser.Program) -> str:
     return ""
 
 
@@ -162,11 +143,6 @@ def code_emission(filename: PreProcessed, _assembly: str) -> Ass:
 def main():
     filename, lex, parse, codegen, _S = _arg_parse()
     match (lex, parse, codegen):
-        case (False, False, False):
-            pre, lexed = lexer(filename)
-            pre.unlink()
-            ass = preprocessed_to_assembly(pre, assembly_generation(parser(lexed)))
-            print(link(ass))
         case (True, False, False):
             pre, lexed = lexer(filename)
             pre.unlink()
@@ -175,13 +151,22 @@ def main():
         case (False, True, False):
             pre, lexed = lexer(filename)
             pre.unlink()
-            print(parser(lexed))
+            print(parser.Program(lexed))
             return
         case (False, False, True):
             pre, lexed = lexer(filename)
             pre.unlink()
-            ass = preprocessed_to_assembly(pre, assembly_generation(parser(lexed)))
+            ass = preprocessed_to_assembly(
+                pre, assembly_generation(parser.Program(lexed))
+            )
             print(ass)
+        case (False, False, False):
+            pre, lexed = lexer(filename)
+            pre.unlink()
+            ass = preprocessed_to_assembly(
+                pre, assembly_generation(parser.Program(lexed))
+            )
+            print(link(ass))
         case _:
             raise ValueError("Nope")
     breakpoint()

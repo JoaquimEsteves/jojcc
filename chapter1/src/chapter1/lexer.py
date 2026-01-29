@@ -1,7 +1,18 @@
+"""
+TODO(Joaquim): Export these so that the parser can also use them
+
+(OR...just put the parser in the same file as the lexer?
+150 lines on the parser ATM...not that many.
+Maybe slap a `class Lex` as a little namespace?)
+"""
+
+from shared import data_types as dt
+
 import re
 
 type Token = str
-type Lexed = list[Token]
+type Token_Lexed = tuple[Token, str, dt.LineNo]
+type Lexed = list[Token_Lexed]
 
 WHITESPACE = re.compile(r"\s")
 
@@ -30,24 +41,24 @@ TOKEN_REGEX = {
 
 def lex(input: str):
     lexed: Lexed = []
+    lineno = 0
 
-    def inner(current: str):
+    def inner(current: str, lineno: dt.LineNo):
         for token, regex in TOKEN_REGEX.items():
             match = regex.match(current)
             if match is None:
                 continue
-            lexed.extend(
+            lexed.append(
                 # if DEBUG add the `rest`
-                [token, current[slice(*match.span())]],
+                (token, current[slice(*match.span())], lineno),
             )
-            return current[match.end() :]
+            return current[match.end() :], lineno + match.end()
         raise ValueError("Syntax Error")
 
     while input != "":
         if WHITESPACE.match(input):
             input = input.lstrip()
             continue
-        input = inner(input)
+        input, lineno = inner(input, lineno)
 
     return lexed
-
