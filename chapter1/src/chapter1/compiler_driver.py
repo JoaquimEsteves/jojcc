@@ -6,20 +6,15 @@ import re
 import subprocess
 from textwrap import dedent
 
+from pydantic import RootModel
+
 from chapter1.lexer import lex
 import chapter1.parser as parser
+import chapter1.codegen as codegen
 from shared import data_types as dt
 
 
-class PreProcessed(Path):
-    pass
-
-
-class Ass(Path):
-    pass
-
-
-class Elf(Path):
+class PreProcessed(RootModel[Path]):
     pass
 
 
@@ -36,28 +31,23 @@ def preprocess(input_file: Path) -> PreProcessed:
     return PreProcessed(output_file)
 
 
-def preprocessed_to_assembly(
-    pre: PreProcessed,
-    _assembly: str,
-) -> Ass:
-    """
-    AKA: code-emission
-    """
-    output_file = _file_extensions(pre, ".i$", "s")
-    output_file.touch()
-    return Ass(output_file)
-
-
-def link(ass: Ass) -> Elf:
+def link(filename: Path, ass: codegen.Ass):
     # Traditionally PREPROCESSED_FILES have the `.i` extension
-    output_file = _file_extensions(ass, ".s$", "")
+
+    assembly_path = _file_extensions(filename, ".c$", "s")
+    output_file = _file_extensions(filename, ".c$", "")
+
+    with open(assembly_path, "w") as f:
+        _ = f.write(ass.root)
+
     _ = subprocess.run(
-        [dt.COMPILER.get(), "-E", "-P", str(ass), "-o", str(output_file)],
+        [dt.COMPILER.get(), str(assembly_path), "-o", str(output_file)],
         check=True,
     )
+    assembly_path.unlink()
+
     assert output_file.exists(), "What happened yo?"
-    ass.unlink()
-    return Elf(output_file)
+    return output_file
 
 
 def _file_extensions(input_file: Path, remove: str, new: str):
@@ -128,48 +118,37 @@ type AST = list[str]
 
 def lexer(input: Path):
     pre = preprocess(input)
-    with open(pre, "r") as f:
+    with open(pre.root, "r") as f:
         return pre, lex(f.read())
 
 
-def assembly_generation(_ast: parser.Program) -> str:
+def assembly_generation(_ast: codegen.Program) -> str:
     return ""
 
 
-def code_emission(filename: PreProcessed, _assembly: str) -> Ass:
-    return preprocessed_to_assembly(filename, _assembly)
-
-
 def main():
-    filename, lex, parse, codegen, _S = _arg_parse()
-    match (lex, parse, codegen):
-        case (True, False, False):
-            pre, lexed = lexer(filename)
-            pre.unlink()
-            print(lexed)
-            return
-        case (False, True, False):
-            pre, lexed = lexer(filename)
-            pre.unlink()
-            print(parser.Program(lexed))
-            return
-        case (False, False, True):
-            pre, lexed = lexer(filename)
-            pre.unlink()
-            ass = preprocessed_to_assembly(
-                pre, assembly_generation(parser.Program(lexed))
-            )
-            print(ass)
-        case (False, False, False):
-            pre, lexed = lexer(filename)
-            pre.unlink()
-            ass = preprocessed_to_assembly(
-                pre, assembly_generation(parser.Program(lexed))
-            )
-            print(link(ass))
-        case _:
-            raise ValueError("Nope")
-    breakpoint()
+    filename, lex, parse, codegen_f, S_flag = _arg_parse()
+
+    pre, lexed = lexer(filename)
+    pre.root.unlink()
+    if lex:
+        print(lexed)
+        return
+    parsed = parser.Program(lexed)
+    if parse:
+        print(parsed)
+        return
+    assembly_ast = codegen.parsed_to_assembly_construct(parsed)
+    if codegen_f:
+        print(assembly_ast)
+        return
+    assembly_str = codegen.to_assembly(filename, assembly_ast)
+    if S_flag:
+        print(assembly_str.root)
+        return
+
+    elf = link(filename, assembly_str)
+    print(elf)
 
 
 if __name__ == "__main__":

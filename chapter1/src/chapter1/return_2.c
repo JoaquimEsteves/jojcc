@@ -1,6 +1,7 @@
 // usr/bin/gcc "$0" -o /tmp/a.out && exec /tmp/a.out "$@"
-//  Compile with `$ gcc -S -O -fno-asynchronous-unwind-tables
-//  -fcf-protection=none return_2.c` -S: Emit the assembly, by not running the
+//  Compile with:
+//  `$ gcc -S -O -fno-asynchronous-unwind-tables -fcf-protection=none return_2.c`
+//  -S: Emit the assembly, by not running the
 //  assembler or linker -O optimize to clean up some instructions namely:
 //         ✂️  pushq   %rbp
 //         ✂️  movq    %rsp, %rbp
