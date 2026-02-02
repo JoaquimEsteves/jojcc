@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.14"
 dependencies = [
     "chapter1",
+    "chapter2",
     "shared",
     # ipython is not _strickly_ necessary
     # But trust on this one - you shan't be able to live without `pdb`
@@ -25,11 +26,13 @@ lsp = [
 [tool.uv.workspace]
 members = [
     "chapter1",
+    "chapter2",
     "shared",
 ]
 
 [tool.uv.sources]
 chapter1 = { workspace = true }
+chapter2 = { workspace = true }
 shared = { workspace = true }
 
 [tool.ruff]
