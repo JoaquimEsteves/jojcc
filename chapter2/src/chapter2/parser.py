@@ -122,11 +122,9 @@ class Expression(BaseModel):
                 assert rest == [], "There should be nothing after the constant!"
                 return Expression(type=Constant(identifier))  # pyright: ignore[reportArgumentType]
             case "OPEN_PARENS":
-                # breakpoint()
                 assert tokens[-1][0] == "CLOSE_PARENS", "Didn't close your parens bro"
-                return Expression(
-                    has_parens=True, type=Expression.parse(tokens[1:-1]).type
-                )
+                # Probably the last solution was better?
+                return Expression.parse(tokens[1:-1])
 
             case "COMPLEMENT" | "NEGATION":
                 return Expression(type=Unary(type=token, exp=Expression.parse(rest)))
@@ -147,5 +145,6 @@ class Identifier(RootModel[str]):
     def __init__(self, tokens: lexer.Token_Lexed):
         token, identifier, _ = tokens
         assert token == "IDENTIFIER", "Not an identifier!"
-
+        # TODO(Joaquim): Add asserts for forbidden identifiers
+        # Stoping stuff like (True = False)
         return super().__init__(root=identifier)  # pyright: ignore[reportUnknownMemberType]

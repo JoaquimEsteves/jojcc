@@ -8,6 +8,7 @@ from textwrap import dedent
 
 from pydantic import RootModel
 
+from chapter2 import tacky
 from chapter2.lexer import lex
 import chapter2.parser as parser
 import chapter2.codegen as codegen
@@ -64,6 +65,7 @@ class Args(t.NamedTuple):
     lex: bool
     parse: bool
     codegen: bool
+    tacky: bool
     S: bool
 
 
@@ -89,10 +91,17 @@ def _arg_parse():
         """),
     )
     _ = parser.add_argument(
+        "--tacky",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser & tacky, but stop before assembly generation
+        """),
+    )
+    _ = parser.add_argument(
         "--codegen",
         action="store_true",
         help=dedent("""\
-            Run the lexer & parser & assembly generation, but stop before code emission
+            Run the lexer & parser & tacky & assembly generation, but stop before code emission
         """),
     )
 
@@ -107,7 +116,7 @@ def _arg_parse():
 
     args = parser.parse_args()
     filename = Path(args.filename)  # pyright: ignore[reportAny]
-    assert filename.exists(), "{filename=} not found"
+    assert filename.exists(), f"{filename=} not found"
     return Args(
         **(args.__dict__ | {"filename": filename}),
     )
@@ -127,7 +136,7 @@ def assembly_generation(_ast: codegen.Program) -> str:
 
 
 def main():
-    filename, lex, parse, codegen_f, S_flag = _arg_parse()
+    filename, lex, parse, codegen_f, tacky_f, S_flag = _arg_parse()
 
     pre, lexed = lexer(filename)
     pre.root.unlink()
@@ -138,7 +147,11 @@ def main():
     if parse:
         print(parsed)
         return
-    assembly_ast = codegen.parsed_to_assembly_construct(parsed)
+    tackified = tacky.Program.from_ast(parsed)
+    if tacky_f:
+        print(tackified)
+        return
+    assembly_ast = codegen.parsed_to_assembly_construct(tackified)
     if codegen_f:
         print(assembly_ast)
         return
@@ -148,7 +161,7 @@ def main():
         return
 
     elf = link(filename, assembly_str)
-    print(elf)
+    print(f"compiled to {elf.absolute()}")
 
 
 if __name__ == "__main__":

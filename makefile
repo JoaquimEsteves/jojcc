@@ -6,7 +6,7 @@ UV_INSTALLED := $(MAKE_CACHE)/uv_installed
 # If you're using the `uv` based pyright feel free to tweak it here
 PYRIGHT := basedpyright
 
-TEST_PROG := writing-a-c-compiler-tests/test_compiler --latest-only
+TEST_PROG = writing-a-c-compiler-tests/test_compiler --latest-only
 
 install $(HAS_INSTALLED): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .git/hooks/pre-push
 	uv sync
@@ -22,7 +22,7 @@ format: $(HAS_INSTALLED)
 	uv run ruff format
 .PHONY: format
 
-test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_1_lexer $(MAKE_CACHE)/chapter_1_parser
+test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_2_lexer $(MAKE_CACHE)/chapter_2_parser
 	$(PYRIGHT) .
 .PHONY: test
 
