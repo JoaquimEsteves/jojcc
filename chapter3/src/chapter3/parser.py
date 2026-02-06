@@ -4,12 +4,19 @@ AST Definition
 As ASDL (Zephyr Abstract Syntax Description Language)
 
 ```
-...same as chapt1
-exp = Constant(int) | Unary(unary_operator, exp)
-unary_operator = Complement | Negate
+<program> ::= <function>
+<function> ::= "int" <identifier> "(" "void" ")" "{" <statement> "}"
+<statement> ::= "return" <exp> ";"
+<exp> ::= <factor> | <exp> <binop> <exp>
+<factor> ::= <int> | <unop> <factor> | "(" <exp> ")"
+<unop> ::= "-" | "~"
+<binop> ::= "-" | "+" | "*" | "/" | "%"
+<identifier> ::= ? An identifier token ?
+<int> ::= ? A constant token ?
 ```
 """
 
+from textwrap import dedent
 import typing as t
 from chapter3 import lexer
 
@@ -35,6 +42,15 @@ class Function(BaseModel):
     return_type: CType
     name: Identifier
     body: Statement
+
+    @t.override
+    def __repr__(self):
+        return dedent(f"""
+            (function
+                ('name {self.name.root})
+                ('return_type {self.return_type.root})
+                ('body {repr(self.body.root.exp)})
+        """)
 
     @staticmethod
     def get_closing_bracket_index(tokens: lexer.Lexed):
@@ -105,40 +121,140 @@ class IfStatement(BaseModel):
         raise NotImplementedError
 
 
-class Statement(RootModel[IfStatement | ReturnStatement]):
+class Statement(RootModel[ReturnStatement]):
     def __init__(self, tokens: lexer.Lexed):
         return super().__init__(root=ReturnStatement(tokens))  # pyright: ignore[reportUnknownMemberType]
 
+    @t.override
+    def __repr__(self):
+        return repr(self.root)
+
 
 class Expression(BaseModel):
-    has_parens: bool = False
-    type: Constant | Unary
+    type: BinaryOp | Factor
+
+    @t.override
+    def __repr__(self):
+        return repr(self.type)
 
     @staticmethod
-    def parse(tokens: lexer.Lexed) -> Expression:
-        (token, identifier, lineno), *rest = tokens
-        match token:
-            case "CONSTANT":
-                assert rest == [], "There should be nothing after the constant!"
-                return Expression(type=Constant(identifier))  # pyright: ignore[reportArgumentType]
-            case "OPEN_PARENS":
-                assert tokens[-1][0] == "CLOSE_PARENS", "Didn't close your parens bro"
-                # Probably the last solution was better?
-                return Expression.parse(tokens[1:-1])
+    def parse(tokens: lexer.Lexed, min_prec: int = 0) -> Expression:
+        def inner(
+            tokens: lexer.Lexed, min_prec: int = 0
+        ) -> tuple[Expression, lexer.Lexed]:
+            left, right = Factor.parse(tokens)
+            while right:
+                (operator, _identifier, _), *rest = right
 
-            case "COMPLEMENT" | "NEGATION":
-                return Expression(type=Unary(type=token, exp=Expression.parse(rest)))
-            case _:
-                raise ValueError(f"Syntax Error, unknown {token=} at {lineno=}")
+                if operator not in BINARY_OP_PRECEDENCE.keys():
+                    break
+                operator = t.cast(Binary_Operation, operator)
+                if BINARY_OP_PRECEDENCE[operator] < min_prec:
+                    # Let the other nerds handle this!
+                    break
+
+                # Don't quite understand this +1 if I must be honest
+                rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
+                left = BinaryOp(type=operator, lhs=Expression(type=left), rhs=rhs)
+                right = other_rest
+
+            return Expression(type=left), right
+
+        exp, rest = inner(tokens, min_prec)
+        assert rest == [], "We left food on the table!"
+        return exp
 
 
 class Constant(RootModel[int]):
     pass
 
 
+class Factor(BaseModel):
+    """
+    The name `factor` comes from the fact that this symbol can appear as a
+    _factor_ in a multiplication expression.
+
+    """
+
+    type: Constant | Unary | Expression
+
+    @t.override
+    def __repr__(self):
+        match self.type:
+            case Constant():
+                return repr(self.type.root)
+            case Unary():
+                return f"({self.type.type} {repr(self.type.exp)})"
+            case Expression():
+                return repr(self.type.type)
+
+    @staticmethod
+    def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
+        (token, identifier, lineno), *rest = tokens
+        match token:
+            case "CONSTANT":
+                return Factor(
+                    type=Constant(identifier),  # pyright: ignore[reportArgumentType]
+                ), rest
+            case "OPEN_PARENS":
+                # BUG! Doesn't work with silly reduntant_parens!
+                number_of_open = 1
+                number_of_closed = 0
+                corresponding_closed = None
+                for index, token in enumerate(tokens[1:], start=1):
+                    if token[0] == "OPEN_PARENS":
+                        number_of_open += 1
+                        continue
+                    if token[0] == "CLOSE_PARENS":
+                        number_of_closed += 1
+                        if number_of_closed == number_of_open:
+                            corresponding_closed = index
+                            break
+
+                assert corresponding_closed is not None, "You missed a parens bro!"
+                return Factor(
+                    type=Expression.parse(tokens[1:corresponding_closed])
+                ), tokens[corresponding_closed + 1 :]
+
+            case "COMPLEMENT" | "MINUS":
+                exp, rest = Factor.parse(rest)
+                return Factor(
+                    type=Unary(type=token, exp=exp),
+                ), rest
+            case _:
+                raise ValueError(f"Syntax Error, unknown {token=} at {lineno=}")
+
+
 class Unary(BaseModel):
-    type: t.Literal["COMPLEMENT", "NEGATION"]
-    exp: Expression
+    type: t.Literal["COMPLEMENT", "MINUS"]
+    exp: Factor
+
+
+type Binary_Operation = t.Literal[
+    "MINUS",
+    "PLUS",
+    "ASTERISK",
+    "FORWARD_SLASH",
+    "PERCENT",
+]
+
+BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
+    "MINUS": 45,
+    "PLUS": 45,
+    "ASTERISK": 50,
+    "FORWARD_SLASH": 50,
+    "PERCENT": 50,
+}
+
+
+class BinaryOp(BaseModel):
+    type: Binary_Operation
+    lhs: Expression
+    rhs: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"({self.type} {repr(self.lhs.type)} {repr(self.rhs.type)})"
 
 
 class Identifier(RootModel[str]):

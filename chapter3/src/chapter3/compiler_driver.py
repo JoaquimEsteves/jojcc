@@ -1,4 +1,4 @@
-#!/usr/bin/env -S uv run
+#!/usr/bin/env -S uv run --script
 import typing as t
 from pathlib import Path
 import argparse
@@ -137,6 +137,10 @@ def assembly_generation(_ast: codegen.Program) -> str:
 
 def main():
     filename, lex, parse, codegen_f, tacky_f, S_flag = _arg_parse()
+    _ = subprocess.run(
+        [dt.CAT_PROGRAM, str(filename)],
+        check=True,
+    )
 
     pre, lexed = lexer(filename)
     pre.root.unlink()

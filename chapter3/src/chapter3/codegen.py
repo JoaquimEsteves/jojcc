@@ -126,7 +126,7 @@ class Mov(BaseModel):
 
 
 class Unary(BaseModel):
-    op: t.Literal["COMPLEMENT", "NEGATION"]
+    op: t.Literal["COMPLEMENT", "MINUS"]
     operand: Operand
 
     def to_assembly(self):

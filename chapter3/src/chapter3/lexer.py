@@ -1,11 +1,3 @@
-"""
-TODO(Joaquim): Export these so that the parser can also use them
-
-(OR...just put the parser in the same file as the lexer?
-150 lines on the parser ATM...not that many.
-Maybe slap a `class Lex` as a little namespace?)
-"""
-
 import re
 import typing as t
 
@@ -29,7 +21,7 @@ type Token = t.Literal[
     "SEMICOLON",
     "COMPLEMENT",
     "DECREMENT",
-    "NEGATION",
+    "MINUS",
     "PLUS",
     "ASTERISK",
     "FORWARD_SLASH",
@@ -58,7 +50,7 @@ TOKEN_REGEX = t.cast(
                 "SEMICOLON": r";",
                 "COMPLEMENT": r"~",
                 "DECREMENT": r"--",
-                "NEGATION": r"-",
+                "MINUS": r"-",
                 "PLUS": r"\+",
                 "ASTERISK": r"\*",
                 "FORWARD_SLASH": r"/",
