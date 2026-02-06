@@ -7,6 +7,7 @@ requires-python = ">=3.14"
 dependencies = [
     "chapter1",
     "chapter2",
+    "chapter3",
     "shared",
     # ipython is not _strickly_ necessary
     # But trust on this one - you shan't be able to live without `pdb`
@@ -27,12 +28,14 @@ lsp = [
 members = [
     "chapter1",
     "chapter2",
+    "chapter3",
     "shared",
 ]
 
 [tool.uv.sources]
 chapter1 = { workspace = true }
 chapter2 = { workspace = true }
+chapter3 = { workspace = true }
 shared = { workspace = true }
 
 [tool.ruff]

@@ -6,7 +6,15 @@ UV_INSTALLED := $(MAKE_CACHE)/uv_installed
 # If you're using the `uv` based pyright feel free to tweak it here
 PYRIGHT := basedpyright
 
-TEST_PROG = writing-a-c-compiler-tests/test_compiler --latest-only
+LATEST_ONLY ?= true
+
+ifeq ($(LATEST_ONLY), true)
+	# --latest-only only checks the stuff for one particular chapter
+	#  Generally that's what we want
+	TEST_PROG := writing-a-c-compiler-tests/test_compiler --latest-only
+else
+	TEST_PROG := writing-a-c-compiler-tests/test_compiler
+endif
 
 install $(HAS_INSTALLED): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .git/hooks/pre-push
 	uv sync
@@ -16,13 +24,17 @@ install $(HAS_INSTALLED): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .
 lint: $(HAS_INSTALLED)
 	uv run ruff check
 	uv run ruff format --check
+	command -v prettier && prettier --check $$(git ls-files '*.md')
 .PHONY: lint
 
 format: $(HAS_INSTALLED)
 	uv run ruff format
+	command -v prettier && prettier --write $$(git ls-files '*.md')
 .PHONY: format
 
-test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_2_lexer $(MAKE_CACHE)/chapter_2_parser
+# In `test` mode we always run the final and all previous
+test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
+test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_2_final
 	$(PYRIGHT) .
 .PHONY: test
 
@@ -46,3 +58,4 @@ $(MAKE_CACHE):
 
 include chapter1/makefile
 include chapter2/makefile
+include chapter3/makefile

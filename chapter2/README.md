@@ -34,17 +34,16 @@ program.c
 └──┬─────────────────────────────────┘
    │  Assembly
    │
-┌──▼──────────┐ 
-│Code Emission│ 
-└──┬──────────┘ 
+┌──▼──────────┐
+│Code Emission│
+└──┬──────────┘
    ▼
 program.s
 ```
 
 # Negation and Bitwise Complement
 
-* In this chapter we add negation (`-<int>`) and  bitwise complement (`~<int>`, flips every bit)
-
+- In this chapter we add negation (`-<int>`) and bitwise complement (`~<int>`, flips every bit)
 
 ```assembly
 // Given int main(void) { return ~(-2); }
@@ -78,9 +77,9 @@ Most production compilers optimize the RBP away, using only the `RSP`, but for a
 
 `push X` does two things.
 
-* Writes the value being pushed (X) to the next empty spot on the stack. 
-   - The push/pop adjust the stack pointer in 8-byte increments. So the next empty spot after a `PUSH` is `RSP-8` (this book uses negative offset, to me it makes more sense that we increment it, but what can ya ya do lol)
-* Decrements the RSP by 8. The address in RSP is now the top of the stack, and the value is X
+- Writes the value being pushed (X) to the next empty spot on the stack.
+  - The push/pop adjust the stack pointer in 8-byte increments. So the next empty spot after a `PUSH` is `RSP-8` (this book uses negative offset, to me it makes more sense that we increment it, but what can ya ya do lol)
+- Decrements the RSP by 8. The address in RSP is now the top of the stack, and the value is X
 
 Example
 
@@ -91,7 +90,9 @@ RSP: ─────────────►  a 0x08
                      b 0x16
                      c 0x24
 ```
+
 `push $3`
+
 ```
 After
 
@@ -109,6 +110,6 @@ into stack space we've already allocated.
 So all functions begin by first invoking `push` N times, and then moving the values over to their spots on the stack.
 
 | Fake-C         | Fake Assembly                                   |
-| ---            | ---                                             |
+| -------------- | ----------------------------------------------- |
 | `i64 foo = 0`  | `push $0`                                       |
 | `i32 foo = -1` | `push $0`; `movl $-1 RBP-8` OR `movl $-1 RSP+8` |
