@@ -173,8 +173,9 @@ class Mov(BaseModel):
             case _:
                 return self
 
-    def to_assembly(self) -> str:
-        return f"\tmovl {self.src.to_assembly()}, {self.dest.to_assembly()}"
+    def to_assembly(self, type: t.Literal["l", "b"] = "l") -> str:
+        # In the future - the type will be inferred according to the src/dest
+        return f"\tmov{type} {self.src.to_assembly()}, {self.dest.to_assembly()}"
 
 
 class Unary(BaseModel):
@@ -186,28 +187,14 @@ class Unary(BaseModel):
         return f"\t{op}l {self.operand.to_assembly()}"
 
 
-type Simple_Binary = t.Literal[
-    "MINUS",
-    "PLUS",
-    "ASTERISK",
-]
-
-
 class Binary(BaseModel):
-    op: Simple_Binary
+    op: parser.Simple_Binary
     src: Operand
     dest: Operand
 
     def to_assembly(self) -> str:
         ass_op = self.match_op(self.op)
         match (self.op, self.src, self.dest):
-            case "MINUS" | "PLUS", Stack(), Stack():
-                scratch = Reg.get_scratch()
-                pre = Mov(src=self.src, dest=scratch)
-                return (
-                    f"{pre.to_assembly()}\n"
-                    f"\t{ass_op} {scratch.to_assembly()}, {self.dest.to_assembly()}"
-                )
             case "ASTERISK", _, Stack():
                 scratch = Reg.get_scratch("R11")
                 pre = Mov(src=self.dest, dest=scratch)
@@ -217,11 +204,38 @@ class Binary(BaseModel):
                     f"\t{ass_op} {self.src.to_assembly()}, {scratch.to_assembly()}\n"
                     f"{after.to_assembly()}"
                 )
+            case "LEFT_SHIFT" | "RIGHT_SHIFT", source, dest if not isinstance(
+                source, Imm
+            ):
+                # Left and right shift have a special rule
+                # From the manual: https://www.felixcloutier.com/x86/sal:sar:shl:shr
+                # > The destination operand can be a register or a memory
+                # > location. The count operand can be an immediate value or
+                # > the CL register
+
+                # The source must be either a constant, or on the special %CL register
+                scratch = Reg.get_scratch("CL")
+                pre = Mov(src=self.src, dest=scratch)
+                return (
+                    # Said special `cl` register must be moved with `movb`?????
+                    # Apparently the `CL` is a byte-sized register
+                    # So we must move a bite
+                    f"{pre.to_assembly('b')}\n"
+                    f"\t{ass_op} {scratch.to_assembly()}, {dest.to_assembly()}\n"
+                )
+            case _, Stack(), Stack():
+                scratch = Reg.get_scratch()
+                pre = Mov(src=self.src, dest=scratch)
+                return (
+                    f"{pre.to_assembly()}\n"
+                    f"\t{ass_op} {scratch.to_assembly()}, {self.dest.to_assembly()}"
+                )
+
             case _:
                 return f"\t{ass_op} {self.src.to_assembly()}, {self.dest.to_assembly()}"
 
     @staticmethod
-    def match_op(op: Simple_Binary):
+    def match_op(op: parser.Simple_Binary):
         match op:
             case "MINUS":
                 return "subl"
@@ -229,6 +243,16 @@ class Binary(BaseModel):
                 return "addl"
             case "ASTERISK":
                 return "imull"
+            case "LEFT_SHIFT":
+                return "sall"
+            case "RIGHT_SHIFT":
+                return "sarl"
+            case "AMPERSAND":
+                return "andl"
+            case "PIPE":
+                return "orl"
+            case "CARRET":
+                return "xorl"
 
 
 class Idiv(BaseModel):
@@ -293,10 +317,16 @@ class Imm(BaseModel):
 
 
 class Reg(BaseModel):
-    root: t.Literal["AX", "R10", "R11", "DX"]
+    root: t.Literal[
+        "AX",
+        "R10",
+        "R11",
+        "DX",
+        "CL",  # Special for left-right-shift
+    ]
 
     @staticmethod
-    def get_scratch(which: t.Literal["R10", "R11"] = "R10"):
+    def get_scratch(which: t.Literal["R10", "R11", "CL"] = "R10"):
         return Reg(root=which)
 
     def to_assembly(self) -> str:
@@ -309,6 +339,8 @@ class Reg(BaseModel):
                 return "%r10d"
             case "R11":
                 return "%r11d"
+            case "CL":
+                return "%cl"
 
 
 class Stack(BaseModel):

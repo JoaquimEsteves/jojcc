@@ -234,6 +234,11 @@ type Simple_Binary = t.Literal[
     "MINUS",
     "PLUS",
     "ASTERISK",
+    "AMPERSAND",
+    "PIPE",
+    "CARRET",
+    "LEFT_SHIFT",
+    "RIGHT_SHIFT",
 ]
 
 type Binary_Operation = (
@@ -244,12 +249,22 @@ type Binary_Operation = (
     ]
 )
 
+# These come from
+# The reference is:
+# https://en.cppreference.com/w/c/language/operator_precedence.html
+# The code expects that higher -> more priority
+# So we just subtract it instead of changing the algo from the book
 BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
-    "MINUS": 45,
-    "PLUS": 45,
-    "ASTERISK": 50,
-    "FORWARD_SLASH": 50,
-    "PERCENT": 50,
+    "ASTERISK": 100 - 3,
+    "FORWARD_SLASH": 100 - 3,
+    "PERCENT": 100 - 3,
+    "MINUS": 100 - 4,
+    "PLUS": 100 - 4,
+    "LEFT_SHIFT": 100 - 5,
+    "RIGHT_SHIFT": 100 - 5,
+    "AMPERSAND": 100 - 8,
+    "CARRET": 100 - 9,
+    "PIPE": 100 - 10,
 }
 
 

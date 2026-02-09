@@ -26,6 +26,11 @@ type Token = t.Literal[
     "ASTERISK",
     "FORWARD_SLASH",
     "PERCENT",
+    "AMPERSAND",
+    "PIPE",
+    "CARRET",
+    "LEFT_SHIFT",
+    "RIGHT_SHIFT",
 ]
 
 TOKEN_REGEX = t.cast(
@@ -55,6 +60,11 @@ TOKEN_REGEX = t.cast(
                 "ASTERISK": r"\*",
                 "FORWARD_SLASH": r"/",
                 "PERCENT": r"%",
+                "AMPERSAND": r"&",
+                "PIPE": r"\|",
+                "CARRET": r"\^",
+                "LEFT_SHIFT": r"<<",
+                "RIGHT_SHIFT": r">>",
             }
         ).items()
     },

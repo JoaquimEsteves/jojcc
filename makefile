@@ -7,13 +7,19 @@ UV_INSTALLED := $(MAKE_CACHE)/uv_installed
 PYRIGHT := basedpyright
 
 LATEST_ONLY ?= true
+FAIL_FAST ?= false
+
+TEST_PROG := writing-a-c-compiler-tests/test_compiler
 
 ifeq ($(LATEST_ONLY), true)
 	# --latest-only only checks the stuff for one particular chapter
 	#  Generally that's what we want
-	TEST_PROG := writing-a-c-compiler-tests/test_compiler --latest-only
-else
-	TEST_PROG := writing-a-c-compiler-tests/test_compiler
+	TEST_PROG += --latest-only
+endif
+
+ifeq ($(FAIL_FAST), true)
+	# Stop on first failure
+	TEST_PROG += --failfast
 endif
 
 install $(HAS_INSTALLED): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .git/hooks/pre-push
