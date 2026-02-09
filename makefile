@@ -40,7 +40,7 @@ format: $(HAS_INSTALLED)
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_3_final
+test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_4_final
 	$(PYRIGHT) .
 .PHONY: test
 
@@ -65,3 +65,4 @@ $(MAKE_CACHE):
 include chapter1/makefile
 include chapter2/makefile
 include chapter3/makefile
+include chapter4/makefile
