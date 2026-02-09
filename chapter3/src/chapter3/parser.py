@@ -230,13 +230,19 @@ class Unary(BaseModel):
     exp: Factor
 
 
-type Binary_Operation = t.Literal[
+type Simple_Binary = t.Literal[
     "MINUS",
     "PLUS",
     "ASTERISK",
-    "FORWARD_SLASH",
-    "PERCENT",
 ]
+
+type Binary_Operation = (
+    Simple_Binary
+    | t.Literal[
+        "FORWARD_SLASH",
+        "PERCENT",
+    ]
+)
 
 BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
     "MINUS": 45,
