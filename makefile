@@ -1,7 +1,18 @@
 # TODO(Joaquim): add a `make help`
 
+
+###############################################################################
+#                                    VARS                                     #
+###############################################################################
+
 MAKE_CACHE := .make_cache
-HAS_INSTALLED := $(MAKE_CACHE)/has_installed
+
+# See: https://docs.astral.sh/uv/pip/environments/#using-arbitrary-python-environments
+VENV ?= .venv
+# See: https://github.com/astral-sh/uv/issues/7778
+UV_PROJECT_ENVIRONMENT := $(VENV)
+export UV_PROJECT_ENVIRONMENT 
+
 UV_INSTALLED := $(MAKE_CACHE)/uv_installed
 # If you're using the `uv` based pyright feel free to tweak it here
 PYRIGHT := basedpyright
@@ -22,46 +33,87 @@ ifeq ($(FAIL_FAST), true)
 	TEST_PROG += --failfast
 endif
 
-install $(HAS_INSTALLED): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .git/hooks/pre-push
+
+###############################################################################
+#                                  Commands                                   #
+###############################################################################
+
+install $(VENV): pyproject.toml | $(MAKE_CACHE) .git/hooks/pre-commit .git/hooks/pre-push
 	uv sync
-	touch $(HAS_INSTALLED)
+	touch $(UV_PROJECT_ENVIRONMENT)
 .PHONY: install
 
-lint: $(HAS_INSTALLED)
+
+MARKDOWN_FILES := $(shell git ls-files '*.md') 
+FORMATTED_MARKDOWN := $(addprefix $(MAKE_CACHE)/Formatted_, $(MARKDOWN_FILES))
+
+lint: $(VENV) $(FORMATTED_MARKDOWN) | $(MAKE_CACHE)
 	uv run ruff check
 	uv run ruff format --check
-	command -v prettier && prettier --check $$(git ls-files '*.md')
 .PHONY: lint
 
-format: $(HAS_INSTALLED)
+format: $(VENV) $(FORMATTED_MARKDOWN) | $(MAKE_CACHE)
 	uv run ruff format
-	command -v prettier && prettier --write $$(git ls-files '*.md')
 .PHONY: format
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(HAS_INSTALLED) $(MAKE_CACHE)/chapter_4_final
+test: $(VENV) $(MAKE_CACHE)/chapter_4_final | $(MAKE_CACHE)
 	$(PYRIGHT) .
 .PHONY: test
 
 clean:
 	rm -r $(MAKE_CACHE) || true
-	rm -r .venv
+	rm -r $(VENV)
 .PHONY: clean
 
+
+add_git_hooks: .git/hooks/pre-commit .git/hooks/pre-push
+	@:
+.PHONY: add_git_hooks
+
+
+###############################################################################
+#                                                                             #
+#                                   Targets                                   #
+#                                                                             #
+###############################################################################
+
+THIS_TARGET = $@
+THIS_PREQ = $?
+
+###############################################################################
+#                            Non-Python formatter                             #
+###############################################################################
+HAS_PRETTIER := $(shell command -v prettier || false)
+
+$(MAKE_CACHE)/Formatted_%.md: %.md
+
+ifndef HAS_PRETTIER
+	$(info Could not format markdown files! Download prettier)
+else
+	prettier --write $(THIS_PREQ)
+	mkdir -p $(dir $(THIS_TARGET))
+endif
+	touch $(THIS_TARGET)
+
+
+###############################################################################
+#                                  Git-Hooks                                  #
+###############################################################################
 .git/hooks/pre-commit:
 	ln -sf $(realpath scripts/pre_commit.sh) .git/hooks/pre-commit
 
 .git/hooks/pre-push:
 	ln -sf $(realpath scripts/pre_push.sh) .git/hooks/pre-push
 
-add_git_hooks: .git/hooks/pre-commit .git/hooks/pre-push
-	@:
-.PHONY: add_git_hooks
 
 $(MAKE_CACHE):
 	mkdir --parents $(MAKE_CACHE)
 
+###############################################################################
+#                                  Includes                                   #
+###############################################################################
 include chapter1/makefile
 include chapter2/makefile
 include chapter3/makefile

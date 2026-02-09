@@ -1,9 +1,5 @@
 # This file is not meant to be used directly.
 # It's instead included by the top-level makefile
-see_ass return_2.s: src/chapter1/return_2.c
-	$(COMPILER) -S -O -fno-asynchronous-unwind-tables -fcf-protection=none src/chapter1/return_2.c
-	cat return_2.s
-.PHONY: see_ass
 
 chapter_1_lexer $(MAKE_CACHE)/chapter_1_lexer: chapter1/src/* | $(MAKE_CACHE)
 	$(TEST_PROG) chapter1/src/chapter1/compiler_driver.py --chapter 1 --stage lex
