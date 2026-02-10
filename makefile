@@ -73,6 +73,23 @@ add_git_hooks: .git/hooks/pre-commit .git/hooks/pre-push
 .PHONY: add_git_hooks
 
 
+ass:
+ifndef F
+	$(error Requires the `F=<some_file>.c` arg!)
+endif
+	$(CC) -S -O -fno-asynchronous-unwind-tables -fcf-protection=none $(F) -o /dev/stdout
+.PHONY: ass
+
+
+wtf:
+ifndef F
+	$(error Requires the `F=<some_file>.c` arg!)
+endif
+	cat $(F) > wtf.c
+	./driver -S wtf.c > wtf.s
+.PHONY: ass
+
+
 ###############################################################################
 #                                                                             #
 #                                   Targets                                   #
@@ -81,6 +98,8 @@ add_git_hooks: .git/hooks/pre-commit .git/hooks/pre-push
 
 THIS_TARGET = $@
 THIS_PREQ = $?
+
+
 
 ###############################################################################
 #                            Non-Python formatter                             #

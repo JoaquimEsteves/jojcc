@@ -139,9 +139,6 @@ class Function(BaseModel):
                 case tacky.Copy(src=src, dest=dest):
                     instructions.extend(Mov.new(get_val(src), get_val(dest)))
 
-                case tacky.Jump(target=target):
-                    instructions.append(Jmp(root=target))
-
                 case tacky.JumpIfZero(target=target, condition=condition):
                     instructions.extend(
                         (
@@ -156,6 +153,9 @@ class Function(BaseModel):
                             JmpCC(cond="ne", label=target),
                         )
                     )
+
+                case tacky.Jump(target=target):
+                    instructions.append(Jmp(root=target))
 
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
@@ -370,13 +370,26 @@ class Cmp(BaseModel):
     def to_assembly(self) -> str:
         res: list[str] = []
         source = self.lhs
-        if isinstance(self.lhs, Stack) and isinstance(self.rhs, Stack):
-            scratch = Reg.get_scratch()
-            intermediate = Mov(src=self.lhs, dest=scratch)
-            res.append(intermediate.to_assembly())
-            source = scratch
+        dest = self.rhs
 
-        res.append(f"\tcompl {source.to_assembly()}, {self.rhs.to_assembly()}")
+        match self.lhs, self.rhs:
+            case (Stack(), Stack()):
+                scratch = Reg.get_scratch()
+                intermediate = Mov(src=self.lhs, dest=scratch)
+                res.append(intermediate.to_assembly())
+                source = scratch
+
+            case (_, Imm()):
+                # The destination can never be the right-side
+                scratch = Reg.get_scratch()
+                intermediate = Mov(src=self.rhs, dest=scratch)
+                res.append(intermediate.to_assembly())
+                dest = scratch
+
+            case _:
+                pass
+
+        res.append(f"\tcmpl {source.to_assembly()}, {dest.to_assembly()}")
         return "\n".join(res)
 
 
@@ -392,7 +405,7 @@ class JmpCC(BaseModel):
     cond: Cond_Code
 
     def to_assembly(self) -> str:
-        return f"\tjmp{self.cond} {self.label}"
+        return f"\tj{self.cond} {self.label}"
 
 
 class SetCC(BaseModel):

@@ -25,12 +25,10 @@ def get_literal_vals[T](alias: T) -> frozenset[T]:
     def resolve(alias: TypeAliasType | tuple[T, ...] | T) -> Iterator[T]:
         match alias:
             case TypeAliasType():
-                # breakpoint()
                 for val in resolve(get_args(alias.__value__)):  # pyright: ignore[reportAny]
                     yield from resolve(val)
                 return
             case tuple():
-                # breakpoint()
                 t_seq = cast(Sequence[T], alias)
                 for element in t_seq:
                     yield from resolve(element)

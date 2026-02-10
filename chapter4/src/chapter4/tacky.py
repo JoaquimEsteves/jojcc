@@ -194,40 +194,52 @@ def emit_tacky(
                 case "AND":
                     end = make_label("and_end")
                     dst = Var(name=make_temp("result_and"))
+                    tmp = Var(name=make_temp("tmp"))
 
+                    # DON'T use `extend` for the whole thing!
+                    # The eval-order will be wrong, the instructions will be appendded out of order!
+                    # As the inner `emit_tacky` will "win"
                     instructions.append(Copy(src=parser.Constant(root=0), dest=dst))
-
                     v1 = emit_tacky(lhs, instructions)
-                    instructions.append(JumpIfZero(condition=v1, target=end))
-                    v2 = emit_tacky(rhs, instructions)
+                    instructions.append(Copy(src=v1, dest=tmp))
+                    instructions.append(JumpIfZero(condition=tmp, target=end))
+                    instructions.append(
+                        Copy(src=emit_tacky(rhs, instructions), dest=tmp)
+                    )
                     instructions.extend(
                         (
-                            JumpIfZero(condition=v2, target=end),
-                            # Both passed!
+                            JumpIfZero(condition=tmp, target=end),
                             Copy(src=parser.Constant(root=1), dest=dst),
                             Label(identifier=end),
-                        )
+                        ),
                     )
                     return dst
                 case "OR":
-                    end = make_label("and_end")
+                    end = make_label("or_end")
                     dst = Var(name=make_temp("result_or"))
+                    tmp = Var(name=make_temp("tmp"))
 
                     instructions.append(Copy(src=parser.Constant(root=1), dest=dst))
+                    # OPTIMIZATION - only move `copy` if the var is not a constant
+                    instructions.append(
+                        Copy(src=emit_tacky(lhs, instructions), dest=tmp)
+                    )
 
-                    v1 = emit_tacky(lhs, instructions)
-                    # If v1 is not zero then exit
+                    # If lhs is not zero then exit
                     # We already set the return to 1
-                    instructions.append(JumpIfNotZero(condition=v1, target=end))
-                    v2 = emit_tacky(rhs, instructions)
+                    instructions.append(JumpIfNotZero(condition=tmp, target=end))
+                    instructions.append(
+                        Copy(src=emit_tacky(rhs, instructions), dest=tmp)
+                    )
 
                     instructions.extend(
                         (
-                            JumpIfNotZero(condition=v2, target=end),
+                            JumpIfNotZero(condition=tmp, target=end),
                             Copy(src=parser.Constant(root=0), dest=dst),
                             Label(identifier=end),
                         )
                     )
+
                     return dst
                 case _:
                     v1 = emit_tacky(lhs, instructions)
