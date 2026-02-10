@@ -47,12 +47,8 @@ import typing as t
 
 from chapter4 import parser
 
-from pydantic import BaseModel, Field
-
-Identifier = t.Annotated[str, Field(pattern=r"^[a-zA-Z0-9_\.]+$")]
-"""
-Only letters, digits, periods, and underscores
-"""
+from pydantic import BaseModel
+import shared.data_types as dt
 
 
 class Program(BaseModel):
@@ -91,8 +87,12 @@ class Var(BaseModel):
     name: str
 
 
+type Simple_Unary = t.Literal["COMPLEMENT", "MINUS"]
+type Unary_Op = Simple_Unary | t.Literal["NOT"]
+
+
 class Unary(BaseModel):
-    operation: t.Literal["COMPLEMENT", "MINUS", "NOT"]
+    operation: Unary_Op
     source: Value
     destination: Value
 
@@ -110,7 +110,23 @@ class Copy(BaseModel):
 
 
 class Jump(BaseModel):
-    target: Identifier
+    """
+    Interesting note on how `jump` works in assembly
+
+    ```asm
+        addl $1, %eax
+        jmp foo
+        movl $0, %eax
+    foo:
+        ret
+    ```
+
+    The assembler and linker will replace `foo` with `jump 5`.
+    This is because the instruction `movl $0, %eax` is 5 bytes long.
+    So we increment a special `RIP` address by 5, hence skipping the movl
+    """
+
+    target: dt.Identifier
 
 
 class JumpIfZero(Jump):
@@ -122,7 +138,7 @@ class JumpIfNotZero(Jump):
 
 
 class Label(BaseModel):
-    identifier: Identifier
+    identifier: dt.Identifier
 
 
 # Evident how we can convert other types of statements (like an if)
@@ -176,20 +192,19 @@ def emit_tacky(
         case parser.BinaryOp(type=bin_op, lhs=lhs, rhs=rhs):
             match bin_op:
                 case "AND":
-                    nope = make_label("and_fail")
                     end = make_label("and_end")
                     dst = Var(name=make_temp("result_and"))
 
+                    instructions.append(Copy(src=parser.Constant(root=0), dest=dst))
+
                     v1 = emit_tacky(lhs, instructions)
-                    instructions.append(JumpIfZero(condition=v1, target=nope))
+                    instructions.append(JumpIfZero(condition=v1, target=end))
                     v2 = emit_tacky(rhs, instructions)
                     instructions.extend(
                         (
-                            JumpIfZero(condition=v2, target=nope),
+                            JumpIfZero(condition=v2, target=end),
+                            # Both passed!
                             Copy(src=parser.Constant(root=1), dest=dst),
-                            Jump(target=end),
-                            Label(identifier=nope),
-                            Copy(src=parser.Constant(root=0), dest=dst),
                             Label(identifier=end),
                         )
                     )

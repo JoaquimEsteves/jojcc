@@ -5,15 +5,21 @@ program = Program(function_definition)
 function_definition = Function(identifier name, instruction* instructions)
 instruction = Mov(operand src, operand dst)
             | Unary(unary_operator, operand)
-            | _Binary(binary_operator, operand, operand)_
-            | _Idiv(operand)_
-            | _Cdq_
+            | Binary(binary_operator, operand, operand)
+            | _Cmp(operand, operand)_
+            | Idiv(operand)
+            | Cdq
+            | _Jmp(identifier)_
+            | _JmpCC(cond_code, identifier)_
+            | _SetCC(cond_code, operand)_
+            | _Label(identifier)_
             | AllocateStack(int)
             | Ret
 unary_operator = Neg | Not
-binary_operator = _Add | Sub | Mult_
+binary_operator = Add | Sub | Mult
 operand = Imm(int) | Reg(reg) | Pseudo(identifier) | Stack(int)
-reg = AX | _DX_ | R10 | _R11_
+cond_code = _E_ | _NE_ | _G_ | _GE_ | _L_ | _LE_
+reg = AX | DX | R10 | R11
 ```
 """
 
@@ -28,8 +34,49 @@ from chapter4 import tacky
 from shared import data_types as dt
 
 
-class Ass(RootModel[str]):
-    pass
+def to_assembly(filename: Path, prog: Program) -> Ass:
+    """
+    Since there's always just the one function...
+    """
+    resp: list[str] = [
+        f'.file\t"{filename.name}"',
+        ".text",
+    ] + prog.to_assembly()
+
+    return Ass("\n".join(resp) + "\n")
+
+
+type Instruction = (
+    Mov
+    | Unary
+    | AllocateStack
+    | Return
+    | Idiv
+    | Cdq
+    | Binary
+    | Cmp
+    | Jmp
+    | JmpCC
+    | SetCC
+    | Label
+)
+type Cond_Code = t.Literal["e", "ne", "g", "ge", "l", "le"]
+
+
+def map_relational_to_cond_code(code: parser.Relational_Binary) -> Cond_Code:
+    match code:
+        case "EQUAL":
+            return "e"
+        case "NEQUAL":
+            return "ne"
+        case "LE":
+            return "le"
+        case "LT":
+            return "l"
+        case "GT":
+            return "g"
+        case "GE":
+            return "ge"
 
 
 class Program(BaseModel):
@@ -43,6 +90,9 @@ class Program(BaseModel):
         return self.function.to_assembly() + [
             '.section .note.GNU-stack,"",@progbits',
         ]
+
+
+type Get_Val = "t.Callable[[tacky.Value], Imm | Stack]"
 
 
 class Function(BaseModel):
@@ -80,54 +130,36 @@ class Function(BaseModel):
                     src = get_val(value)
                     instructions.extend([Mov(src=src, dest=Reg(root="AX")), Return()])
 
-                case tacky.Unary(
-                    operation=operation,
-                    source=source,
-                    destination=destination,
-                ):
-                    src = get_val(source)
-                    dest = get_val(destination)
+                case tacky.Unary():
+                    instructions.extend(Unary.from_tacky(inst, get_val))
+
+                case tacky.BinaryOp():
+                    instructions.extend(Binary.from_tacky(inst, get_val))
+
+                case tacky.Copy(src=src, dest=dest):
+                    instructions.extend(Mov.new(get_val(src), get_val(dest)))
+
+                case tacky.Jump(target=target):
+                    instructions.append(Jmp(root=target))
+
+                case tacky.JumpIfZero(target=target, condition=condition):
                     instructions.extend(
-                        [
-                            *Mov.new(src=src, dest=dest),
-                            Unary(op=operation, operand=dest),
-                        ]
+                        (
+                            Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
+                            JmpCC(cond="e", label=target),
+                        )
                     )
-                case tacky.BinaryOp(
-                    operation=operation,
-                    src1=src1,
-                    src2=src2,
-                    dest=dest,
-                ):
-                    src1 = get_val(src1)
-                    src2 = get_val(src2)
-                    dest = get_val(dest)
-                    match operation:
-                        case "FORWARD_SLASH" | "PERCENT":
-                            # Division/remainder - are a bit of an ass
-                            # `idiv` slapts the result in `EAX` and the remainder in `EDX`
-                            instructions.extend(
-                                [
-                                    Mov(src=src1, dest=Reg(root="AX")),
-                                    Cdq(),
-                                    Idiv(root=src2),
-                                    Mov(
-                                        src=Reg(
-                                            root="AX"
-                                            if operation == "FORWARD_SLASH"
-                                            else "DX"
-                                        ),
-                                        dest=dest,
-                                    ),
-                                ]
-                            )
-                        case _:
-                            instructions.extend(
-                                [
-                                    *Mov.new(src=src1, dest=dest),
-                                    Binary(op=operation, src=src2, dest=dest),
-                                ]
-                            )
+                case tacky.JumpIfNotZero(target=target, condition=condition):
+                    instructions.extend(
+                        (
+                            Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
+                            JmpCC(cond="ne", label=target),
+                        )
+                    )
+
+                case tacky.Label(identifier=identifier):
+                    instructions.append(Label(root=identifier))
+                    pass
 
         stack_allocation.root = stack_pointer
         return Function(name=func.name, instructions=instructions)
@@ -142,9 +174,6 @@ class Function(BaseModel):
         ] + [i.to_assembly() for i in self.instructions]
 
         return res
-
-
-type Instruction = Mov | Unary | AllocateStack | Return | Idiv | Cdq | Binary
 
 
 class Mov(BaseModel):
@@ -179,12 +208,47 @@ class Mov(BaseModel):
 
 
 class Unary(BaseModel):
-    op: t.Literal["COMPLEMENT", "MINUS"]
+    op: tacky.Simple_Unary
     operand: Operand
 
     def to_assembly(self) -> str:
-        op = "not" if self.op == "COMPLEMENT" else "neg"
-        return f"\t{op}l {self.operand.to_assembly()}"
+        match self.op:
+            case "COMPLEMENT":
+                return f"\tnotl {self.operand.to_assembly()}"
+            case "MINUS":
+                return f"\tnegl {self.operand.to_assembly()}"
+
+    @staticmethod
+    def from_tacky(
+        arg: tacky.Unary, get_val: t.Callable[[tacky.Value], Imm | Stack]
+    ) -> tuple[Instruction, ...]:
+        match arg:
+            case tacky.Unary(
+                operation="NOT",
+                source=source,
+                destination=destination,
+            ):
+                dst = get_val(destination)
+                return (
+                    Cmp(lhs=Imm(root=0), rhs=get_val(source)),
+                    Mov(src=Imm(root=0), dest=dst),
+                    SetCC(cond="e", operand=dst),  # pyright: ignore[reportArgumentType]
+                )
+
+            case tacky.Unary(
+                operation=operation,
+                source=source,
+                destination=destination,
+            ):
+                src = get_val(source)
+                dest = get_val(destination)
+                return (
+                    *Mov.new(src=src, dest=dest),
+                    Unary(
+                        op=operation,  # pyright: ignore[reportArgumentType]
+                        operand=dest,
+                    ),
+                )
 
 
 class Binary(BaseModel):
@@ -205,7 +269,6 @@ class Binary(BaseModel):
                     f"{after.to_assembly()}"
                 )
             case "PLUS" | "MINUS" | "ASTERISK" | "LEFT_SHIFT" | "RIGHT_SHIFT", _, Imm():
-                # This is the case for shifts too innit?
                 raise ValueError(
                     "Bad assembly! Destination can't be a constant! It holds the result"
                 )
@@ -217,7 +280,7 @@ class Binary(BaseModel):
                 # > the CL register
 
                 # The source must be either a constant, or on the special %CL register
-                scratch = Reg.get_scratch("CL")
+                scratch = Reg.get_scratch("CL", 8)
                 pre = Mov(src=self.src, dest=scratch)
                 return (
                     # Said special `cl` register must be moved with `movb`?????
@@ -256,6 +319,95 @@ class Binary(BaseModel):
                 return "orl"
             case "CARRET":
                 return "xorl"
+
+    @staticmethod
+    def from_tacky(inst: tacky.BinaryOp, get_val: Get_Val) -> tuple[Instruction, ...]:
+        src1 = get_val(inst.src1)
+        src2 = get_val(inst.src2)
+        dest = get_val(inst.dest)
+        match inst.operation:
+            case "FORWARD_SLASH" | "PERCENT":
+                # Division/remainder - are a bit of an ass
+                # `idiv` slapts the result in `EAX` and the remainder in `EDX`
+                return (
+                    Mov(src=src1, dest=Reg(root="AX")),
+                    Cdq(),
+                    Idiv(root=src2),
+                    Mov(
+                        src=Reg(
+                            root="AX" if inst.operation == "FORWARD_SLASH" else "DX"
+                        ),
+                        dest=dest,
+                    ),
+                )
+
+            case "LE" | "LT" | "GT" | "GE" | "EQUAL" | "NEQUAL":
+                return (
+                    Cmp(lhs=src2, rhs=src1),
+                    Mov(src=Imm(root=0), dest=dest),
+                    SetCC(
+                        cond=map_relational_to_cond_code(inst.operation),
+                        operand=dest,  # pyright: ignore[reportArgumentType]
+                    ),
+                )
+
+            case _arrithmetic:
+                return (
+                    *Mov.new(src=src1, dest=dest),
+                    Binary(
+                        op=inst.operation,  # pyright: ignore[reportArgumentType]
+                        src=src2,
+                        dest=dest,
+                    ),
+                )
+        raise ValueError("unreachable")  # pyright: ignore[reportUnreachable]
+
+
+class Cmp(BaseModel):
+    lhs: Operand
+    rhs: Operand
+
+    def to_assembly(self) -> str:
+        res: list[str] = []
+        source = self.lhs
+        if isinstance(self.lhs, Stack) and isinstance(self.rhs, Stack):
+            scratch = Reg.get_scratch()
+            intermediate = Mov(src=self.lhs, dest=scratch)
+            res.append(intermediate.to_assembly())
+            source = scratch
+
+        res.append(f"\tcompl {source.to_assembly()}, {self.rhs.to_assembly()}")
+        return "\n".join(res)
+
+
+class Jmp(BaseModel):
+    root: dt.Identifier
+
+    def to_assembly(self) -> str:
+        return f"\tjmp {self.root}"
+
+
+class JmpCC(BaseModel):
+    label: dt.Identifier
+    cond: Cond_Code
+
+    def to_assembly(self) -> str:
+        return f"\tjmp{self.cond} {self.label}"
+
+
+class SetCC(BaseModel):
+    operand: Stack | Reg
+    cond: Cond_Code
+
+    def to_assembly(self) -> str:
+        return f"\tset{self.cond} {get_8_bit(self.operand).to_assembly()}"
+
+
+class Label(BaseModel):
+    root: dt.Identifier
+
+    def to_assembly(self) -> str:
+        return f"{self.root}:"
 
 
 class Idiv(BaseModel):
@@ -327,23 +479,36 @@ class Reg(BaseModel):
         "DX",
         "CL",  # Special for left-right-shift
     ]
+    size: t.Literal[32, 8] = 32
 
     @staticmethod
-    def get_scratch(which: t.Literal["R10", "R11", "CL"] = "R10"):
-        return Reg(root=which)
+    def get_scratch(
+        which: t.Literal["R10", "R11", "CL"] = "R10", size: t.Literal[32, 8] = 32
+    ):
+        return Reg(root=which, size=size)
 
     def to_assembly(self) -> str:
-        match self.root:
-            case "AX":
+        match self.root, self.size:
+            case "AX", 32:
                 return "%eax"
-            case "DX":
+            case "AX", 8:
+                return "%al"
+            case "DX", 32:
                 return "%edx"
-            case "R10":
+            case "DX", 8:
+                return "%dl"
+            case "R10", 32:
                 return "%r10d"
-            case "R11":
+            case "R10", 8:
+                return "%r10b"
+            case "R11", 32:
                 return "%r11d"
-            case "CL":
+            case "R11", 8:
+                return "%r11b"
+            case "CL", 8:
                 return "%cl"
+            case "CL", 32:
+                raise ValueError("NOPE")
 
 
 class Stack(BaseModel):
@@ -353,17 +518,17 @@ class Stack(BaseModel):
         return f"{self.root}(%rbp)"
 
 
+def get_8_bit(operand: Stack | Reg):
+    match operand:
+        case Stack():
+            return operand
+        case Reg(root=root):
+            return Reg(root=root, size=8)
+
+
 def parsed_to_assembly_construct(prog: tacky.Program):
     return Program.from_tacky(prog)
 
 
-def to_assembly(filename: Path, prog: Program) -> Ass:
-    """
-    Since there's always just the one function...
-    """
-    resp: list[str] = [
-        f'.file\t"{filename.name}"',
-        ".text",
-    ] + prog.to_assembly()
-
-    return Ass("\n".join(resp) + "\n")
+class Ass(RootModel[str]):
+    pass

@@ -255,9 +255,13 @@ type Relational_Binary = t.Literal[
     "GE",
     "EQUAL",
     "NEQUAL",
-    "AND",
-    "OR",
 ]
+
+type Special_Relational_Binary = t.Literal["AND", "OR"]
+"""
+These nerds are special, since they'll do a little jump
+and not execute the right-side (sometimes)
+"""
 
 type Binary_Operation = (
     Simple_Binary
@@ -266,6 +270,7 @@ type Binary_Operation = (
         "FORWARD_SLASH",
         "PERCENT",
     ]
+    | Special_Relational_Binary
 )
 
 

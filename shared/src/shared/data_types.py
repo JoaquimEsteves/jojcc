@@ -5,7 +5,15 @@ from contextvars import ContextVar
 import os
 import typing as t
 
+from pydantic import Field
+
 type LineNo = t.Annotated[int, Ge(0)]
+
+
+Identifier = t.Annotated[str, Field(pattern=r"^[a-zA-Z0-9_\.]+$")]
+"""
+Only letters, digits, periods, and underscores
+"""
 
 
 USE_ONLY_RBP = ContextVar(
