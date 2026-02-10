@@ -18,3 +18,8 @@ wheels/
 
 # vim crap
 Session.vim
+
+#
+/debug
+/debug.asm
+/debug.c
