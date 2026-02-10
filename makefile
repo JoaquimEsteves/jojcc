@@ -173,3 +173,4 @@ include chapter1/makefile
 include chapter2/makefile
 include chapter3/makefile
 include chapter4/makefile
+include chapter5/makefile

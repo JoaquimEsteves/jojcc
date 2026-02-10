@@ -15,6 +15,7 @@ dependencies = [
     "ipython",
     "pydantic>=2.12.5",
     "ruff>=0.14.14",
+    "chapter5",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +33,7 @@ members = [
     "chapter3",
     "chapter4",
     "shared",
+    "chapter5",
 ]
 
 [tool.uv.sources]
@@ -40,6 +42,7 @@ chapter2 = { workspace = true }
 chapter3 = { workspace = true }
 chapter4 = { workspace = true }
 shared = { workspace = true }
+chapter5 = { workspace = true }
 
 [tool.ruff]
 extend-exclude = [
