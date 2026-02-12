@@ -171,7 +171,6 @@ def emit_tacky(
         _label_counter += 1
         return f"{label}.{_label_counter}"
 
-    # breakpoint()
     match exp.type:
         case parser.Factor(type=type):
             match type:

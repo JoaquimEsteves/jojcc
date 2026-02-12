@@ -1,3 +1,4 @@
+from pathlib import Path
 from annotated_types import Ge
 from shutil import which
 
@@ -38,7 +39,7 @@ It's a context var just in case there's a weird command that works only for gcc
 but not clang or whatever
 """
 
-CURRENT_FILE = ContextVar("CURRENT_FILE", default="")
+CURRENT_FILE: ContextVar[Path] = ContextVar("CURRENT_FILE", default=Path("/dev/null"))
 """
 For better error messages
 """

@@ -57,6 +57,7 @@ Notes:
 
 """
 
+from contextlib import suppress
 from textwrap import dedent
 import typing as t
 
@@ -72,10 +73,11 @@ class Program(BaseModel):
     <program> ::= <function>
     """
 
-    function: "Function"
+    function: Function
 
-    def __init__(self, tokens: lexer.Lexed):
-        return super().__init__(function=Function(tokens))
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed):
+        return Program(function=Function.from_tokens(tokens))
 
 
 class Function(BaseModel):
@@ -92,11 +94,11 @@ class Function(BaseModel):
         start = pf.indent(
             dedent(
                 f"""
-            (function
-              ('name {self.name.root})
-              ('return_type {self.return_type.root})
-              ('body 
-        """
+                    (function
+                      ('name {self.name.root})
+                      ('return_type {self.return_type.root})
+                      ('body 
+                """
             )
         )
         with pf.set_context(dt.INDENT_LEVEL, dt.INDENT_LEVEL.get() + 2):
@@ -104,7 +106,8 @@ class Function(BaseModel):
 
         return f"{start}{body})"
 
-    def __init__(self, tokens: lexer.Lexed):
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed):
         try:
             (
                 type,
@@ -117,7 +120,9 @@ class Function(BaseModel):
             ) = tokens
 
         except ValueError as e:
-            raise ValueError(f"Nope, function must look like: {self.__doc__}") from e
+            raise ValueError(
+                f"Nope, function must look like: {Function.__doc__}"
+            ) from e
 
         assert parens == "(", "Where's the ( brother?"
         assert void == "void", "Where's the void brother?"
@@ -135,15 +140,15 @@ class Function(BaseModel):
         parsed_body: list[BlockItem] = []
 
         while body:
-            block_item = Declaration.get_next(body) or Statement.get_next(body)
+            block_item = Declaration.from_tokens(body) or Statement.from_tokens(body)
             if block_item is None:
                 raise ValueError("I accept declarations or statements!")
             item, body = block_item
             parsed_body.append(item)
 
-        return super().__init__(
-            return_type=CType(type),
-            name=Identifier(identifier),
+        return Function(
+            return_type=CType.from_tokens(type),
+            name=Identifier.from_tokens(identifier),
             body=parsed_body,
         )
 
@@ -168,13 +173,18 @@ class Declaration(BaseModel):
         return f"{pre} '{self.init or 'void'})"
 
     @staticmethod
-    def get_next(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed] | None:
+    def from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed] | None:
         if len(tokens) < 2:
             return None
         type, identifier, *rest = tokens
 
-        ctype = pf.try_model(CType, token=type)
-        name = pf.try_model(Identifier, token=identifier)
+        ctype: CType | None = None
+        name: Identifier | None = None
+
+        with suppress(AssertionError):
+            ctype = CType.from_tokens(type)
+        with suppress(AssertionError):
+            name = Identifier.from_tokens(identifier)
 
         if ctype is None or name is None:
             return None
@@ -195,10 +205,13 @@ class Declaration(BaseModel):
 
 
 class CType(RootModel[str]):
-    def __init__(self, token: lexer.Token_Lexed):
+    # TODO(Joaquim): Get rid of this awfulness
+
+    @staticmethod
+    def from_tokens(token: lexer.Token_Lexed):
         assert token[0] == "INT_KEYWORD", "I know of no other CTypes! Sorry"
         assert token[1] == "int"
-        return super().__init__(root=token[1])  # pyright: ignore[reportUnknownMemberType]
+        return CType(token[1])
 
 
 class ReturnStatement(BaseModel):
@@ -230,7 +243,7 @@ class Statement(BaseModel):
         return repr(self.root)
 
     @staticmethod
-    def get_next(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed] | None:
+    def from_tokens(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed] | None:
         (next_token, *_), *rest = tokens
 
         if next_token == "SEMICOLON":
@@ -346,7 +359,7 @@ class Factor(BaseModel):
         match token:
             case "IDENTIFIER":
                 return Factor(
-                    type=Identifier((token, identifier, lineno)),
+                    type=Identifier.from_tokens((token, identifier, lineno)),
                 ), rest
             case "CONSTANT":
                 return Factor(
@@ -367,7 +380,7 @@ class Factor(BaseModel):
                     type=Unary(type=token, exp=exp),
                 ), rest
             case _:
-                raise ValueError(f"Syntax Error, unknown {token=} at {lineno=}")
+                raise AssertionError(f"Syntax Error, unknown {token=} at {lineno=}")
 
 
 class Unary(BaseModel):
@@ -482,13 +495,14 @@ class Assignment(BaseModel):
 
 
 class Identifier(RootModel[str]):
-    def __init__(self, token: lexer.Token_Lexed):
+    @staticmethod
+    def from_tokens(token: lexer.Token_Lexed):
         ltoken, identifier, _ = token
         assert ltoken == "IDENTIFIER", "Not an identifier!"
         # TODO(Joaquim): Add asserts for forbidden identifiers
         # Stoping stuff like `True = False`
         # Use pydantic
-        return super().__init__(root=identifier)  # pyright: ignore[reportUnknownMemberType]
+        return Identifier(identifier)
 
     @t.override
     def __repr__(self):

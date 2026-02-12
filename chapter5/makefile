@@ -11,6 +11,11 @@ chapter_5_parser $(MAKE_CACHE)/chapter_5_parser: chapter5/src/* | $(MAKE_CACHE)
 	touch $(MAKE_CACHE)/chapter_5_parser
 .PHONY: chapter_5_parser
 
+chapter_5_validate $(MAKE_CACHE)/chapter_5_validate: chapter5/src/* | $(MAKE_CACHE)
+	$(TEST_PROG) chapter5/src/chapter5/compiler_driver.py --chapter 5 --stage validate --bitwise
+	touch $(MAKE_CACHE)/chapter_5_validate
+.PHONY: chapter_5_validate
+
 chapter_5_tacky $(MAKE_CACHE)/chapter_5_tacky: chapter5/src/* | $(MAKE_CACHE)
 	$(TEST_PROG) chapter5/src/chapter5/compiler_driver.py --chapter 5 --stage tacky --bitwise
 	touch $(MAKE_CACHE)/chapter_5_tacky

@@ -77,6 +77,19 @@ if (a == 2) {
 
 `gcc` will complain, but `clang` doesn't give a shit.
 
+### This is legal (but undefined behaviour)
+
+```c
+int foo = foo + 1;
+
+```
+
+From the book:
+
+> When we process the initializer, foo + 1, the variable foo is already in the
+> map, so the variable resolution pass won’t complain. This is consistent with
+> the C standard; a variable really is in scope in its own initializer. (...)
+
 ## Right vs Left Associativity
 
 It's effectively _how should we order our list?_

@@ -13,6 +13,7 @@ from chapter5 import tacky
 from chapter5.lexer import lex
 import chapter5.parser as parser
 import chapter5.codegen as codegen
+import chapter5.semantic_analysis as semantic_analysis
 from shared import data_types as dt
 
 
@@ -65,6 +66,7 @@ class Args(t.NamedTuple):
     filename: Path
     lex: bool
     parse: bool
+    validate: bool
     codegen: bool
     tacky: bool
     S: bool
@@ -91,18 +93,26 @@ def _arg_parse():
             Run the lexer & parser, but stop before assembly generation
         """),
     )
+
+    _ = parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser & semantic analysis, but stop before assembly generation
+        """),
+    )
     _ = parser.add_argument(
         "--tacky",
         action="store_true",
         help=dedent("""\
-            Run the lexer & parser & tacky, but stop before assembly generation
+            Run the lexer & parser & semantic analysis & tacky, but stop before assembly generation
         """),
     )
     _ = parser.add_argument(
         "--codegen",
         action="store_true",
         help=dedent("""\
-            Run the lexer & parser & tacky & assembly generation, but stop before code emission
+            Run the lexer & parser & semantic analysis & tacky & assembly generation, but stop before code emission
         """),
     )
 
@@ -137,7 +147,7 @@ def assembly_generation(_ast: codegen.Program) -> str:
 
 
 def main():
-    filename, lex, parse, codegen_f, tacky_f, S_flag = _arg_parse()
+    filename, lex, parse, validate_f, codegen_f, tacky_f, S_flag = _arg_parse()
 
     _ = dt.CURRENT_FILE.set(filename)
     # Only 'cat' if we're outputting to a terminal
@@ -153,10 +163,19 @@ def main():
     if lex:
         print(lexed)
         return
-    parsed = parser.Program(lexed)
+    parsed = parser.Program.from_tokens(lexed)
     if parse:
         print(parsed)
         return
+    validated = semantic_analysis.resolve_program(parsed)
+    if validate_f:
+        print("Before")
+        print(parsed)
+        print("After")
+        print(validated)
+        return
+    parsed = validated
+
     tackified = tacky.Program.from_ast(parsed)
     if tacky_f:
         print(tackified)
