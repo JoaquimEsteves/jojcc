@@ -1,5 +1,11 @@
 from collections.abc import Sequence, Iterator
-from typing import get_args, TypeAliasType, cast
+from contextvars import ContextVar
+import typing as t
+import textwrap
+
+from pydantic import BaseModel, ValidationError
+from contextlib import contextmanager
+import shared.data_types as dt
 
 
 def get_literal_vals[T](alias: T) -> frozenset[T]:
@@ -22,23 +28,44 @@ def get_literal_vals[T](alias: T) -> frozenset[T]:
     ```
     """
 
-    def resolve(alias: TypeAliasType | tuple[T, ...] | T) -> Iterator[T]:
+    def resolve(alias: t.TypeAliasType | tuple[T, ...] | T) -> Iterator[T]:
         match alias:
-            case TypeAliasType():
-                for val in resolve(get_args(alias.__value__)):  # pyright: ignore[reportAny]
+            case t.TypeAliasType():
+                for val in resolve(t.get_args(alias.__value__)):  # pyright: ignore[reportAny]
                     yield from resolve(val)
                 return
             case tuple():
-                t_seq = cast(Sequence[T], alias)
+                t_seq = t.cast(Sequence[T], alias)
                 for element in t_seq:
                     yield from resolve(element)
                 return
             case _:
                 # Presume it's a `t.Literal`
-                yield from resolve(get_args(alias))
+                yield from resolve(t.get_args(alias))
 
         # Avoids yielding `t.Literal` again
         if not hasattr(alias, "__args__"):
             yield alias
 
     return frozenset(resolve(alias))
+
+
+def try_model[T: BaseModel](cls: type[T], **args: t.Any):
+    """
+    Tries to build some pydantic module, or returns None
+    """
+    try:
+        return cls(**args)
+    except ValidationError, AssertionError:
+        return None
+
+
+def indent(text: str):
+    return textwrap.indent(text, dt.INDENT_LEVEL.get() * 2 * " ")
+
+
+@contextmanager
+def set_context[T](context: ContextVar[T], val: T):
+    token = context.set(val)
+    yield
+    context.reset(token)

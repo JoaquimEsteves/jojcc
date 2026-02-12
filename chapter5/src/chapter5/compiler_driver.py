@@ -138,6 +138,8 @@ def assembly_generation(_ast: codegen.Program) -> str:
 
 def main():
     filename, lex, parse, codegen_f, tacky_f, S_flag = _arg_parse()
+
+    _ = dt.CURRENT_FILE.set(filename)
     # Only 'cat' if we're outputting to a terminal
     # This allows us to run `compiler_driver.py > whatever.output`
     if sys.stdout.isatty():

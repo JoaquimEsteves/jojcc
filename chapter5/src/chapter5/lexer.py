@@ -73,13 +73,13 @@ TOKEN_REGEX = t.cast(
                 "CARRET": r"\^",
                 "LEFT_SHIFT": r"<<",
                 "RIGHT_SHIFT": r">>",
-                "NEQUAL": r"!=",
+                "!=": r"!=",
                 "NOT": r"!",
                 "AND": r"&&",
                 "AMPERSAND": r"&",
                 "OR": r"\|\|",
                 "PIPE": r"\|",
-                "EQUAL": r"==",
+                "==": r"==",
                 "=": r"=",
                 "LE": r"<=",  # less or equal to
                 "LT": r"<",  # less than

@@ -69,7 +69,7 @@ class Function(BaseModel):
         return Function(
             name=ast.name.root,
             return_type=ast.return_type,
-            instructions=return_to_tacky(ast.body.root),
+            instructions=return_to_tacky(ast.body[0].root),
         )
 
 
@@ -171,6 +171,7 @@ def emit_tacky(
         _label_counter += 1
         return f"{label}.{_label_counter}"
 
+    # breakpoint()
     match exp.type:
         case parser.Factor(type=type):
             match type:

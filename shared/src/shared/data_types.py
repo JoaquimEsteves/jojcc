@@ -38,6 +38,13 @@ It's a context var just in case there's a weird command that works only for gcc
 but not clang or whatever
 """
 
+CURRENT_FILE = ContextVar("CURRENT_FILE", default="")
+"""
+For better error messages
+"""
+
+INDENT_LEVEL = ContextVar("INDENT_LEVEL", default=0)
+
 if which("bat"):
     CAT_PROGRAM = "bat"
 elif which("batcat"):
