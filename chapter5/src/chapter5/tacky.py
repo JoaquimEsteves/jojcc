@@ -43,13 +43,14 @@ Label(end)
 ```
 """
 
+from textwrap import dedent
 import typing as t
 
 from chapter5 import parser
 from chapter5 import semantic_analysis
 
 from pydantic import BaseModel
-import shared.data_types as dt
+from shared import data_types as dt, pure_functions as pf
 
 
 class Program(BaseModel):
@@ -78,6 +79,23 @@ class Function(BaseModel):
             instructions=instructions,
         )
 
+    @t.override
+    def __repr__(self):
+        start = pf.indent(
+            dedent(
+                f"""
+                    (function
+                      ('name {self.name})
+                      ('return_type {self.return_type.root})
+                      ('body 
+                """
+            )
+        )
+        with pf.set_context(dt.INDENT_LEVEL, dt.INDENT_LEVEL.get() + 2):
+            body = pf.indent("\n".join(repr(b) for b in self.instructions))
+
+        return f"{start}{body})"
+
 
 type Instruction = (
     Return | Unary | BinaryOp | Copy | Jump | JumpIfZero | JumpIfNotZero | Label
@@ -88,9 +106,17 @@ type Value = parser.Constant | Var
 class Return(BaseModel):
     root: Value | None
 
+    @t.override
+    def __repr__(self):
+        return f"(return {repr(self.root)})"
+
 
 class Var(BaseModel):
     name: str
+
+    @t.override
+    def __repr__(self):
+        return f"`{self.name}`"
 
 
 type Simple_Unary = t.Literal["COMPLEMENT", "MINUS"]
@@ -102,6 +128,10 @@ class Unary(BaseModel):
     source: Value
     destination: Value
 
+    @t.override
+    def __repr__(self):
+        return f"({self.operation} {repr(self.source)} {repr(self.destination)})"
+
 
 class BinaryOp(BaseModel):
     operation: parser.Binary_Operation
@@ -109,10 +139,18 @@ class BinaryOp(BaseModel):
     src2: Value
     dest: Value
 
+    @t.override
+    def __repr__(self):
+        return f"({self.operation} {repr(self.src1)} {repr(self.src2)})\n({self.operation} {repr(self.src2)} {repr(self.dest)})"
+
 
 class Copy(BaseModel):
     src: Value
     dest: Value
+
+    @t.override
+    def __repr__(self):
+        return f"(copy {repr(self.src)} {repr(self.dest)})"
 
 
 class Jump(BaseModel):

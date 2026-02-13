@@ -322,6 +322,10 @@ class Expression(BaseModel):
 class Constant(RootModel[int]):
     pass
 
+    @t.override
+    def __repr__(self):
+        return str(self.root)
+
 
 class IncDec(BaseModel):
     op: t.Literal["++", "--"]

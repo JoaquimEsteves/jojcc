@@ -23,6 +23,7 @@ reg = AX | DX | R10 | R11
 ```
 """
 
+from textwrap import dedent
 import typing as t
 # import functools
 
@@ -31,7 +32,7 @@ from pydantic import BaseModel, RootModel, model_validator
 
 from chapter5 import parser
 from chapter5 import tacky
-from shared import data_types as dt
+from shared import data_types as dt, pure_functions as pf
 
 
 def to_assembly(filename: Path, prog: Program) -> Ass:
@@ -91,6 +92,10 @@ class Program(BaseModel):
             '.section .note.GNU-stack,"",@progbits',
         ]
 
+    @t.override
+    def __repr__(self):
+        return repr(self.function)
+
 
 type Get_Val = "t.Callable[[tacky.Value], Imm | Stack]"
 
@@ -98,6 +103,22 @@ type Get_Val = "t.Callable[[tacky.Value], Imm | Stack]"
 class Function(BaseModel):
     name: str
     instructions: "list[Instruction]"
+
+    @t.override
+    def __repr__(self):
+        start = pf.indent(
+            dedent(
+                f"""
+                    (function
+                      ('name {self.name})
+                      ('instructions 
+                """
+            )
+        )
+        with pf.set_context(dt.INDENT_LEVEL, dt.INDENT_LEVEL.get() + 2):
+            body = pf.indent("\n".join(repr(b) for b in self.instructions))
+
+        return f"{start}{body})"
 
     @staticmethod
     def from_tacky(func: tacky.Function):
