@@ -3,8 +3,7 @@ from contextvars import ContextVar
 import typing as t
 import textwrap
 
-from pydantic import BaseModel, ValidationError
-from contextlib import contextmanager
+from contextlib import contextmanager, suppress
 import shared.data_types as dt
 
 
@@ -50,14 +49,17 @@ def get_literal_vals[T](alias: T) -> frozenset[T]:
     return frozenset(resolve(alias))
 
 
-def try_model[T: BaseModel](cls: type[T], **args: t.Any):
+# my jank-ass neovim setup is not showing the colours properly
+T = t.TypeVar("T")
+
+
+def try_call(func: t.Callable[[], T], *exceptions: type[BaseException]):
     """
-    Tries to build some pydantic module, or returns None
+    Make exceptions STFU
     """
-    try:
-        return cls(**args)
-    except ValidationError, AssertionError:
-        return None
+    with suppress(*exceptions):
+        return func()
+    return None
 
 
 def indent(text: str):

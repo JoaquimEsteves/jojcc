@@ -127,7 +127,7 @@ class Function(BaseModel):
         for inst in func.instructions:
             match inst:
                 case tacky.Return(root=value):
-                    src = get_val(value)
+                    src = get_val(value) if value else Imm(root=0)
                     instructions.extend([Mov(src=src, dest=Reg(root="AX")), Return()])
 
                 case tacky.Unary():

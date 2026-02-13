@@ -18,37 +18,6 @@ _<declaration> ::= "int" <identifier> ["=" <exp>] ";"_
 <int> ::= ? A constant token ?
 ```
 
-
-```pseudo-code:
-
-parse_function_definition(tokens):
-    // parse everything up through the open brace as before...
-    --snip--
-    function_body = []
-    while peek(tokens) != "}":
-        next_block_item = parse_block_item(tokens)
-        function_body.append(next_block_item)
-    take_token(tokens)
-    return Function(name, function_body)
-
-
-parse_exp(tokens, min_prec):
-    left = parse_factor(tokens)
-    next_token = peek(tokens)
-    while next_token is a binary operator and precedence(next_token) >= min_prec:
-        # This stuff is new!
-        if next_token is "=":
-            take_token(tokens) // remove "=" from list of tokens
-            right = parse_exp(tokens, precedence(next_token))
-            left = Assignment(left, right)
-        else:
-            operator = parse_binop(tokens)
-            right = parse_exp(tokens, precedence(next_token) + 1)
-            left = Binary(operator, left, right)
-        next_token = peek(tokens)
-    return left
-```
-
 Notes:
 
 > While parsing <block-item>, you need a way to tell whether the current block
@@ -87,7 +56,7 @@ class Function(BaseModel):
 
     return_type: CType
     name: Identifier
-    body: list[BlockItem]
+    body: list[Block_Item]
 
     @t.override
     def __repr__(self):
@@ -137,7 +106,7 @@ class Function(BaseModel):
         )
 
         body = rest[0:closing_bracket_index]
-        parsed_body: list[BlockItem] = []
+        parsed_body: list[Block_Item] = []
 
         while body:
             block_item = Declaration.from_tokens(body) or Statement.from_tokens(body)
@@ -153,7 +122,7 @@ class Function(BaseModel):
         )
 
 
-type BlockItem = Statement | Declaration
+type Block_Item = Statement | Declaration
 
 
 class Declaration(BaseModel):
@@ -314,7 +283,14 @@ class Expression(BaseModel):
                 if operator == "=":
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
-                    left = Assignment(lhs=Expression(type=left), rhs=rhs)
+                    assert isinstance(left, Factor), (
+                        "For now - only identifiers can be on the left of assignment"
+                    )
+                    assert isinstance(left.type, Identifier), (
+                        "For now - only identifiers can be on the left of assignment"
+                    )
+                    identifier = left.type
+                    left = Assignment(lhs=identifier, rhs=rhs)
                 else:
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
@@ -486,12 +462,12 @@ class BinaryOp(BaseModel):
 
 
 class Assignment(BaseModel):
-    lhs: Expression
+    lhs: Identifier
     rhs: Expression
 
     @t.override
     def __repr__(self):
-        return f"(= {repr(self.lhs.type)} {repr(self.rhs.type)})"
+        return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
 
 
 class Identifier(RootModel[str]):

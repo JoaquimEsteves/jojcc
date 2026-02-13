@@ -46,6 +46,7 @@ Label(end)
 import typing as t
 
 from chapter5 import parser
+from chapter5 import semantic_analysis
 
 from pydantic import BaseModel
 import shared.data_types as dt
@@ -56,7 +57,8 @@ class Program(BaseModel):
 
     @staticmethod
     def from_ast(prog: parser.Program):
-        return Program(function_def=Function.from_ast(prog.function))
+        instructions: list[Instruction] = []
+        return Program(function_def=Function.from_ast(prog.function, instructions))
 
 
 class Function(BaseModel):
@@ -65,11 +67,15 @@ class Function(BaseModel):
     return_type: parser.CType
 
     @staticmethod
-    def from_ast(ast: parser.Function):
+    def from_ast(ast: parser.Function, instructions: list[Instruction]):
+        for line in ast.body:
+            if isinstance(line, parser.Statement) and line.root == "nope":
+                continue
+            _ = emit_tacky(line, instructions)
         return Function(
             name=ast.name.root,
             return_type=ast.return_type,
-            instructions=return_to_tacky(ast.body[0].root),
+            instructions=instructions,
         )
 
 
@@ -80,7 +86,7 @@ type Value = parser.Constant | Var
 
 
 class Return(BaseModel):
-    root: Value
+    root: Value | None
 
 
 class Var(BaseModel):
@@ -141,39 +147,55 @@ class Label(BaseModel):
     identifier: dt.Identifier
 
 
-# Evident how we can convert other types of statements (like an if)
-def return_to_tacky(ret: parser.ReturnStatement):
-    instructions: list[Instruction] = []
-    final = emit_tacky(ret.exp, instructions)
-    return instructions + [Return(root=final)]
+def make_temp(label: str = "_TMP_"):
+    semantic_analysis.Global_Counter += 1
+    return f"{label}-{semantic_analysis.Global_Counter}"
 
 
-_temp_var_counter = -1
-_label_counter = -1
+def make_label(label: str):
+    semantic_analysis.Global_Counter += 1
+    return f"{label}.{semantic_analysis.Global_Counter}"
 
 
 def emit_tacky(
-    exp: parser.Expression,
-    instructions: list[Instruction] | None,
+    block: parser.Expression | parser.Block_Item,
+    instructions: list[Instruction],
 ) -> Value:
     """
     Mutates instructions (if they exist)
     """
-    instructions = [] if instructions is None else instructions
 
-    def make_temp(label: str = "_TMP_"):
-        global _temp_var_counter
-        _temp_var_counter += 1
-        return f"{label}-{_temp_var_counter}"
+    match block:
+        case parser.Expression():
+            return emit_exp(block, instructions)
+        case parser.Statement():
+            match block.root:
+                case parser.ReturnStatement(exp=expression):
+                    final = emit_tacky(expression, instructions)
+                    instructions.append(Return(root=final))
+                    return final
+                case parser.Expression():
+                    return emit_tacky(block.root, instructions)
+                case "nope":
+                    raise ValueError("This should not be here!")
+        case parser.Declaration(name=name, init=init):
+            var = Var(name=name.root)
+            if init:
+                result = emit_tacky(init, instructions)
+                assert result
+                instructions.append(Copy(src=result, dest=var))
+            return var
 
-    def make_label(label: str):
-        global _label_counter
-        _label_counter += 1
-        return f"{label}.{_label_counter}"
 
+def emit_exp(
+    exp: parser.Expression,
+    instructions: list[Instruction],
+):
     match exp.type:
         case parser.Factor(type=type):
             match type:
+                case parser.Identifier(root=name):
+                    return Var(name=name)
                 case parser.Constant():
                     return type
                 case parser.Unary(type=operation, exp=factor):
@@ -189,6 +211,11 @@ def emit_tacky(
                     return destination
                 case parser.Expression():
                     return emit_tacky(type, instructions)
+        case parser.Assignment(lhs=parser.Identifier(root=name), rhs=rhs):
+            var = Var(name=name)
+            res = emit_tacky(rhs, instructions)
+            instructions.append(Copy(src=res, dest=var))
+            return var
         case parser.BinaryOp(type=bin_op, lhs=lhs, rhs=rhs):
             match bin_op:
                 case "AND":

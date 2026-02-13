@@ -1,5 +1,3 @@
-import typing as t
-
 import chapter5.parser as parser
 
 VARIABLE_MAP: dict[str, str] = {}
@@ -8,7 +6,7 @@ TODO(Joaquim): Use contextvar
 Various functions will no doubt declare their own little `i` variables
 """
 
-Global_Counter = 0
+Global_Counter: int = -1
 """
 Will be used during tacky as well.
 This is to ensure that the tacky-boys don't somehow end up using the same
@@ -20,6 +18,16 @@ def resolve_program(prog: parser.Program):
     func = prog.function
     new_blocks = [resolve_block_item(block) for block in func.body]
 
+    if func.return_type.root == "int":
+        # Ensures that there's always a return statement at the end
+        new_blocks.append(
+            parser.Statement(
+                root=parser.ReturnStatement(
+                    exp=parser.Expression(type=parser.Factor(type=parser.Constant(0)))
+                )
+            )
+        )
+
     return parser.Program(
         function=parser.Function(
             name=func.name,
@@ -29,7 +37,7 @@ def resolve_program(prog: parser.Program):
     )
 
 
-def resolve_block_item(block: parser.BlockItem):
+def resolve_block_item(block: parser.Block_Item):
     match block:
         case parser.Declaration():
             return resolve_declaration(block)
@@ -100,23 +108,12 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
 def resolve_expression(exp: parser.Expression) -> parser.Expression:
     match exp.type:
         case parser.Assignment(lhs=lhs, rhs=rhs):
-            match lhs.type:
-                case parser.Factor(type=parser.Identifier()):
-                    # I hate this, and I'm not sure it's right
-                    id = t.cast(parser.Identifier, lhs.type.type)
-                    return parser.Expression(
-                        type=parser.Assignment(
-                            lhs=parser.Expression(
-                                type=parser.Factor(type=resolve_identifier(id))
-                            ),
-                            rhs=resolve_expression(rhs),
-                        )
-                    )
-
-                case _:
-                    raise ValueError(
-                        "For now, the left of assignment must be a variable"
-                    )
+            return parser.Expression(
+                type=parser.Assignment(
+                    lhs=resolve_identifier(lhs),
+                    rhs=resolve_expression(rhs),
+                )
+            )
 
         case parser.Factor():
             return parser.Expression(type=resolve_factor(exp.type))

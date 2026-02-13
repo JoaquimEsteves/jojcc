@@ -62,7 +62,7 @@ format: $(VENV) $(FORMATTED_MARKDOWN) | $(MAKE_CACHE)
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_4_final | $(MAKE_CACHE)
+test: $(VENV) $(MAKE_CACHE)/chapter_5_final | $(MAKE_CACHE)
 	$(TYPE_CHECKER) .
 .PHONY: test
 
