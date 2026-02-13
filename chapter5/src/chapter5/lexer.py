@@ -2,6 +2,7 @@ import re
 import typing as t
 
 from shared import data_types as dt
+from shared.pure_functions import get_literal_vals
 
 type Token_Lexed = tuple[Token, str, dt.LineNo]
 type Lexed = list[Token_Lexed]
@@ -41,7 +42,33 @@ type Token = t.Literal[
     "LE",  # less or equal to
     "GE",  # greater or equal to
     "=",
+    # Compound assignment
+    "+=",
+    "-=",
+    "*=",
+    "%=",
+    "&=",
+    "|=",
+    "^=",
+    "<<=",
+    ">>=",
+    # increment and decrement fancyness
+    # OPERATORS: I have no idea how to do them lol
+    # TODO(Joaquim): Continue reading the book and go back to this
+    # "++",
+    # "--",
 ]
+
+Fancy_Assignment_Ops = t.Literal[
+    "+=", "-=", "*=", "%=", "&=", "|=", "^=", "<<=", ">>=", "/="
+]
+
+Assignment_Ops = t.Literal["=",] | Fancy_Assignment_Ops
+
+ASSIGNMENT_OPS = tuple(
+    t.cast(frozenset[Assignment_Ops], get_literal_vals(Assignment_Ops))
+)
+
 
 TOKEN_REGEX = t.cast(
     dict[Token, re.Pattern[str]],
@@ -65,19 +92,31 @@ TOKEN_REGEX = t.cast(
                 "SEMICOLON": r";",
                 "COMPLEMENT": r"~",
                 "DECREMENT": r"--",
+                # "--": r"--",
+                "-=": r"\-=",
                 "MINUS": r"-",
+                "+=": r"\+=",
+                # "++": r"\+\+",
                 "PLUS": r"\+",
+                "*=": r"\*=",
                 "ASTERISK": r"\*",
+                "/=": r"/=",
                 "FORWARD_SLASH": r"/",
+                "%=": r"%=",
                 "PERCENT": r"%",
+                "^=": r"\^=",
                 "CARRET": r"\^",
+                "<<=": r"<<=",
                 "LEFT_SHIFT": r"<<",
+                ">>=": r">>=",
                 "RIGHT_SHIFT": r">>",
                 "!=": r"!=",
                 "NOT": r"!",
                 "AND": r"&&",
+                "&=": r"&=",
                 "AMPERSAND": r"&",
                 "OR": r"\|\|",
+                "|=": r"\|=",
                 "PIPE": r"\|",
                 "==": r"==",
                 "=": r"=",

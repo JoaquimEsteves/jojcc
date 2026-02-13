@@ -211,9 +211,12 @@ def emit_exp(
                     return destination
                 case parser.Expression():
                     return emit_tacky(type, instructions)
-        case parser.Assignment(lhs=parser.Identifier(root=name), rhs=rhs):
+        case parser.FancyAssignment():
+            raise ValueError("Should have been gone by this stage!")
+        case parser.NormalAssigment(lhs=parser.Identifier(root=name), rhs=rhs):
             var = Var(name=name)
             res = emit_tacky(rhs, instructions)
+
             instructions.append(Copy(src=res, dest=var))
             return var
         case parser.BinaryOp(type=bin_op, lhs=lhs, rhs=rhs):

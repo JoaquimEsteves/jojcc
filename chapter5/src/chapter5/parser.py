@@ -9,11 +9,12 @@ New shit in underscore
 _<block-item> ::= <statement> | <declaration>_
 _<declaration> ::= "int" <identifier> ["=" <exp>] ";"_
 <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
-<exp> ::= <factor> | <exp> <binop> <exp>
-<factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")"
+<exp> ::= <factor> | <exp> <binop> <exp> |
+<factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")" |
 <unop> ::= "-" | "~" | "!"
 <binop> ::= "-" | "+" | "*" | "/" | "%" | "&&" | "||"
           | "==" | "!=" | "<" | "<=" | ">" | ">=" | "="
+          | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
 <identifier> ::= ? An identifier token ?
 <int> ::= ? A constant token ?
 ```
@@ -235,7 +236,11 @@ class Statement(BaseModel):
 
 
 class Expression(BaseModel):
-    type: BinaryOp | Factor | Assignment
+    type: BinaryOp | Factor | FancyAssignment | NormalAssigment
+
+    @staticmethod
+    def read_var(name: str):
+        return Expression(type=Factor(type=Identifier(name)))
 
     @t.override
     def __repr__(self):
@@ -280,7 +285,7 @@ class Expression(BaseModel):
 
                 # RIGHT ASSOCIATIVITY VS LEFT ASSOCIATIVITY
                 # See chapter5/README.md
-                if operator == "=":
+                if operator in lexer.ASSIGNMENT_OPS:
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
                     assert isinstance(left, Factor), (
@@ -290,11 +295,19 @@ class Expression(BaseModel):
                         "For now - only identifiers can be on the left of assignment"
                     )
                     identifier = left.type
-                    left = Assignment(lhs=identifier, rhs=rhs)
+                    left = (
+                        FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
+                        if operator != "="
+                        else NormalAssigment(lhs=identifier, rhs=rhs)
+                    )
                 else:
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
-                    left = BinaryOp(type=operator, lhs=Expression(type=left), rhs=rhs)
+                    left = BinaryOp(
+                        type=operator,  # pyright: ignore[reportArgumentType]
+                        lhs=Expression(type=left),
+                        rhs=rhs,
+                    )
                 right = other_rest
 
             return Expression(type=left), right
@@ -308,6 +321,12 @@ class Expression(BaseModel):
 
 class Constant(RootModel[int]):
     pass
+
+
+class IncDec(BaseModel):
+    op: t.Literal["++", "--"]
+    pre_or_op: t.Literal["pre", "op"]
+    val: Identifier
 
 
 class Factor(BaseModel):
@@ -394,9 +413,8 @@ These nerds are special, since they'll do a little jump
 and not execute the right-side (sometimes)
 """
 
-type Assignment_Operator = t.Literal["="]
 
-type Binary_Operation = (
+type Binary_Op_Without_Assignment = (
     Simple_Binary
     | Relational_Binary
     | t.Literal[
@@ -404,8 +422,9 @@ type Binary_Operation = (
         "PERCENT",
     ]
     | Jumpy_Binary_Op
-    | Assignment_Operator
 )
+
+type Binary_Operation = Binary_Op_Without_Assignment | lexer.Assignment_Ops
 
 
 def _binary_op_precedence(op: Binary_Operation):
@@ -441,7 +460,9 @@ def _binary_op_precedence(op: Binary_Operation):
             return 100 - 11
         case "OR":
             return 100 - 12
-        case "=":
+        case (
+            "=" | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "/="
+        ):
             return 100 - 14
 
 
@@ -452,7 +473,7 @@ BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
 
 
 class BinaryOp(BaseModel):
-    type: Binary_Operation
+    type: Binary_Op_Without_Assignment
     lhs: Expression
     rhs: Expression
 
@@ -461,13 +482,23 @@ class BinaryOp(BaseModel):
         return f"({self.type} {repr(self.lhs.type)} {repr(self.rhs.type)})"
 
 
-class Assignment(BaseModel):
+class NormalAssigment(BaseModel):
     lhs: Identifier
     rhs: Expression
 
     @t.override
     def __repr__(self):
         return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
+
+
+class FancyAssignment(BaseModel):
+    type: lexer.Fancy_Assignment_Ops
+    lhs: Identifier
+    rhs: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"({self.type} {repr(self.lhs)} {repr(self.rhs.type)})"
 
 
 class Identifier(RootModel[str]):

@@ -24,7 +24,8 @@ TYPE_CHECKER := basedpyright
 LATEST_ONLY ?= true
 FAIL_FAST ?= false
 
-TEST_PROG := writing-a-c-compiler-tests/test_compiler
+# Add extra credit later
+TEST_PROG := writing-a-c-compiler-tests/test_compiler --bitwise --compound
 
 ifeq ($(LATEST_ONLY), true)
 	# --latest-only only checks the stuff for one particular chapter
@@ -60,10 +61,14 @@ format: $(VENV) $(FORMATTED_MARKDOWN) | $(MAKE_CACHE)
 	uv run ruff format
 .PHONY: format
 
+type_check:
+	$(TYPE_CHECKER) .
+.PHONY: type_check
+
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_5_final | $(MAKE_CACHE)
-	$(TYPE_CHECKER) .
+test: $(VENV) $(MAKE_CACHE)/chapter_5_final type_check
+	@:
 .PHONY: test
 
 clean:

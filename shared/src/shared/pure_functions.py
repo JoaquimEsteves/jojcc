@@ -46,7 +46,7 @@ def get_literal_vals[T](alias: T) -> frozenset[T]:
         if not hasattr(alias, "__args__"):
             yield alias
 
-    return frozenset(resolve(alias))
+    return frozenset(tuple(resolve(alias)))
 
 
 # my jank-ass neovim setup is not showing the colours properly

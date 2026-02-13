@@ -107,9 +107,50 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
 
 def resolve_expression(exp: parser.Expression) -> parser.Expression:
     match exp.type:
-        case parser.Assignment(lhs=lhs, rhs=rhs):
+        case parser.NormalAssigment(lhs=lhs, rhs=rhs):
             return parser.Expression(
-                type=parser.Assignment(
+                type=parser.NormalAssigment(
+                    lhs=resolve_identifier(lhs),
+                    rhs=resolve_expression(rhs),
+                )
+            )
+        case parser.FancyAssignment(lhs=lhs, rhs=rhs, type=type):
+            # Pyright needed some help here
+            rhs: parser.Expression
+
+            def get_bin_op(type: parser.Binary_Op_Without_Assignment):
+                return parser.Expression(
+                    type=parser.BinaryOp(
+                        type=type,
+                        lhs=parser.Expression(type=parser.Factor(type=lhs)),
+                        rhs=rhs,
+                    )
+                )
+
+            match type:
+                case "+=":
+                    rhs = get_bin_op("PLUS")
+                case "-=":
+                    rhs = get_bin_op("MINUS")
+                case "*=":
+                    rhs = get_bin_op("ASTERISK")
+                case "%=":
+                    rhs = get_bin_op("PERCENT")
+                case "&=":
+                    rhs = get_bin_op("AMPERSAND")
+                case "|=":
+                    rhs = get_bin_op("PIPE")
+                case "^=":
+                    rhs = get_bin_op("CARRET")
+                case "<<=":
+                    rhs = get_bin_op("LEFT_SHIFT")
+                case ">>=":
+                    rhs = get_bin_op("RIGHT_SHIFT")
+                case "/=":
+                    rhs = get_bin_op("FORWARD_SLASH")
+
+            return parser.Expression(
+                type=parser.NormalAssigment(
                     lhs=resolve_identifier(lhs),
                     rhs=resolve_expression(rhs),
                 )
