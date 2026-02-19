@@ -101,8 +101,10 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
             return parser.Factor(type=resolve_expression(factor.type))
         case parser.Identifier():
             return parser.Factor(type=resolve_identifier(factor.type))
-        case parser.Unary(type=type, exp=exp):
-            return parser.Factor(type=parser.Unary(type=type, exp=resolve_factor(exp)))
+        case parser.Unary(type=type, exp=exp, pre=pre):
+            return parser.Factor(
+                type=parser.Unary(type=type, exp=resolve_factor(exp), pre=pre)
+            )
 
 
 def resolve_expression(exp: parser.Expression) -> parser.Expression:

@@ -43,14 +43,14 @@ Label(end)
 ```
 """
 
-from textwrap import dedent
 import typing as t
-
-from chapter5 import parser
-from chapter5 import semantic_analysis
+from textwrap import dedent
 
 from pydantic import BaseModel
-from shared import data_types as dt, pure_functions as pf
+
+from chapter5 import parser, semantic_analysis
+from shared import data_types as dt
+from shared import pure_functions as pf
 
 
 class Program(BaseModel):
@@ -228,7 +228,7 @@ def emit_tacky(
 def emit_exp(
     exp: parser.Expression,
     instructions: list[Instruction],
-):
+) -> Value:
     match exp.type:
         case parser.Factor(type=type):
             match type:
@@ -236,16 +236,59 @@ def emit_exp(
                     return Var(name=name)
                 case parser.Constant():
                     return type
-                case parser.Unary(type=operation, exp=factor):
+                case parser.Unary(type=operation, exp=factor, pre=pre):
                     source = emit_tacky(parser.Expression(type=factor), instructions)
-                    destination = Var(name=make_temp())
-                    instructions.append(
-                        Unary(
-                            operation=operation,
-                            source=source,
-                            destination=destination,
+                    destination: Value
+                    if operation not in ("++", "--"):
+                        destination = Var(name=make_temp())
+                        instructions.append(
+                            Unary(
+                                operation=operation,
+                                source=source,
+                                destination=destination,
+                            )
+                        )
+                        return destination
+
+                    current: t.Any = factor
+                    while hasattr(current, "type"):  # pyright: ignore[reportAny]
+                        current = current.type  # pyright: ignore[reportAny]
+                    assert isinstance(current, parser.Identifier), "Not assignable!"
+
+                    lhs = parser.Expression(type=factor)
+                    rhs = parser.Expression(
+                        type=parser.Factor(type=parser.Constant(root=1))
+                    )
+                    intermediate_exp = parser.Expression(
+                        type=parser.BinaryOp(
+                            type="PLUS" if operation == "++" else "MINUS",
+                            lhs=lhs,
+                            rhs=rhs,
                         )
                     )
+
+                    if pre:
+                        destination = emit_exp(
+                            parser.Expression(
+                                type=parser.NormalAssigment(
+                                    lhs=current, rhs=intermediate_exp
+                                )
+                            ),
+                            instructions,
+                        )
+                    else:
+                        destination = Var(name=make_temp())
+                        instructions.append(Copy(src=source, dest=destination))
+
+                        _ = emit_exp(
+                            parser.Expression(
+                                type=parser.NormalAssigment(
+                                    lhs=current, rhs=intermediate_exp
+                                )
+                            ),
+                            instructions,
+                        )
+
                     return destination
                 case parser.Expression():
                     return emit_tacky(type, instructions)

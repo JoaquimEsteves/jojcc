@@ -18,6 +18,7 @@ wheels/
 
 # vim crap
 Session.vim
+*.swp
 
 #
 /debug

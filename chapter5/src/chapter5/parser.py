@@ -9,9 +9,10 @@ New shit in underscore
 _<block-item> ::= <statement> | <declaration>_
 _<declaration> ::= "int" <identifier> ["=" <exp>] ";"_
 <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
-<exp> ::= <factor> | <exp> <binop> <exp> |
-<factor> ::= <int> | <identifier> | <unop> <factor> | "(" <exp> ")" |
-<unop> ::= "-" | "~" | "!"
+<exp> ::= <factor> | <exp> <binop> <exp>
+<factor> ::= <int> | <identifier> | <unop> <factor> | <factor> <postop> | "(" <exp> ")" |
+<unop> ::= "-" | "~" | "!" | "++" | "--"
+<postop> ::= "++" | "--"
 <binop> ::= "-" | "+" | "*" | "/" | "%" | "&&" | "||"
           | "==" | "!=" | "<" | "<=" | ">" | ">=" | "="
           | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
@@ -164,8 +165,23 @@ class Declaration(BaseModel):
             case "=":
                 exp, rest = Expression.parse(rest)
 
-                (semicolon, *_), *rest = rest
-                assert semicolon == "SEMICOLON", "Missing semicolon!"
+                (next, *_), *rest = rest
+
+                # Special case - I hate these nerds!
+                if next in ("++", "--"):
+                    assert isinstance(exp.type, Factor), "Not assignable"
+                    exp = Expression(
+                        type=Factor(
+                            type=Unary(
+                                type=next,
+                                exp=exp.type,
+                                pre=True,
+                            )
+                        )
+                    )
+                    (next, *_), *rest = rest
+
+                assert next == "SEMICOLON", "Missing semicolon!"
 
                 return Declaration(type=ctype, name=name, init=exp), rest
             case "SEMICOLON":
@@ -320,8 +336,6 @@ class Expression(BaseModel):
 
 
 class Constant(RootModel[int]):
-    pass
-
     @t.override
     def __repr__(self):
         return str(self.root)
@@ -345,10 +359,10 @@ class Factor(BaseModel):
     @t.override
     def __repr__(self):
         match self.type:
-            case Constant():
-                return repr(self.type.root)
-            case Unary():
-                return f"({self.type.type} {repr(self.type.exp)})"
+            case Constant(root=root):
+                return repr(root)
+            case Unary(type=type, exp=exp, pre=pre):
+                return f"({repr(type)} {repr(exp)} {'' if pre else 'postfix'})"
             case Expression() | Identifier():
                 return repr(self.type)
 
@@ -357,23 +371,52 @@ class Factor(BaseModel):
         (token, identifier, lineno), *rest = tokens
         match token:
             case "IDENTIFIER":
-                return Factor(
+                ident = Identifier.from_tokens((token, identifier, lineno))
+                exp = Factor(
                     type=Identifier.from_tokens((token, identifier, lineno)),
+                )
+                # Peek to see if it's a post-op
+
+                if rest and rest[0][0] in ("++", "--"):
+                    (next, _, _), *hmm = rest
+                    rest = hmm
+                    return Factor(
+                        type=Unary(
+                            type=next,  # pyright: ignore[reportArgumentType]
+                            exp=exp,
+                            pre=False,
+                        ),
+                    ), rest
+
+                return Factor(
+                    type=ident,
                 ), rest
             case "CONSTANT":
                 return Factor(
                     type=Constant(identifier),  # pyright: ignore[reportArgumentType]
                 ), rest
             case "OPEN_PARENS":
-                corresponding_closed = get_closing(tokens[1:], ")")
+                corresponding_closed = get_closing(rest, ")")
+                next_token = ""
+                with suppress(IndexError):
+                    next_token = rest[corresponding_closed + 1][0]
+                if next_token in ("++", "--"):
+                    # special case! I hate these nerds
+                    factor, food_left = Factor.parse(
+                        rest[:corresponding_closed] + [rest[corresponding_closed + 1]]
+                    )
+                    assert food_left == [], "We left food on the table!"
+                    return Factor(type=Expression(type=factor)), rest[
+                        corresponding_closed + 2 :
+                    ]
 
                 return Factor(
                     type=Expression.parse(
-                        tokens[1 : corresponding_closed + 1], assert_no_food_left=True
+                        rest[:corresponding_closed], assert_no_food_left=True
                     )
-                ), tokens[corresponding_closed + 2 :]
+                ), rest[corresponding_closed + 1 :]
 
-            case "COMPLEMENT" | "MINUS" | "NOT":
+            case "COMPLEMENT" | "MINUS" | "NOT" | "++" | "--":
                 exp, rest = Factor.parse(rest)
                 return Factor(
                     type=Unary(type=token, exp=exp),
@@ -387,8 +430,11 @@ class Unary(BaseModel):
         "COMPLEMENT",
         "MINUS",
         "NOT",
+        "--",
+        "++",
     ]
     exp: Factor
+    pre: bool = True
 
 
 type Simple_Binary = t.Literal[

@@ -21,7 +21,6 @@ type Token = t.Literal[
     "CLOSE_BRACE",
     "SEMICOLON",
     "COMPLEMENT",
-    "DECREMENT",
     "MINUS",
     "PLUS",
     "ASTERISK",
@@ -55,8 +54,8 @@ type Token = t.Literal[
     # increment and decrement fancyness
     # OPERATORS: I have no idea how to do them lol
     # TODO(Joaquim): Continue reading the book and go back to this
-    # "++",
-    # "--",
+    "++",
+    "--",
 ]
 
 Fancy_Assignment_Ops = t.Literal[
@@ -91,12 +90,11 @@ TOKEN_REGEX = t.cast(
                 "CLOSE_BRACE": r"}",
                 "SEMICOLON": r";",
                 "COMPLEMENT": r"~",
-                "DECREMENT": r"--",
-                # "--": r"--",
+                "--": r"--",
                 "-=": r"\-=",
                 "MINUS": r"-",
                 "+=": r"\+=",
-                # "++": r"\+\+",
+                "++": r"\+\+",
                 "PLUS": r"\+",
                 "*=": r"\*=",
                 "ASTERISK": r"\*",

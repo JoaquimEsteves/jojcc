@@ -25,7 +25,7 @@ LATEST_ONLY ?= true
 FAIL_FAST ?= false
 
 # Add extra credit later
-TEST_PROG := writing-a-c-compiler-tests/test_compiler --bitwise --compound
+TEST_PROG := writing-a-c-compiler-tests/test_compiler --extra-credit
 
 ifeq ($(LATEST_ONLY), true)
 	# --latest-only only checks the stuff for one particular chapter
