@@ -23,9 +23,10 @@ TYPE_CHECKER := basedpyright
 
 LATEST_ONLY ?= true
 FAIL_FAST ?= false
+EXTRA_CREDIT ?= true
 
 # Add extra credit later
-TEST_PROG := writing-a-c-compiler-tests/test_compiler --extra-credit
+TEST_PROG := writing-a-c-compiler-tests/test_compiler
 
 ifeq ($(LATEST_ONLY), true)
 	# --latest-only only checks the stuff for one particular chapter
@@ -38,6 +39,10 @@ ifeq ($(FAIL_FAST), true)
 	TEST_PROG += --failfast
 endif
 
+ifeq ($(EXTRA_CREDIT), true)
+	# Stop on first failure
+	TEST_PROG += --extra-credit
+endif
 
 ###############################################################################
 #                                  Commands                                   #

@@ -8,8 +8,8 @@ New shit in underscore
 <function> ::= "int" <identifier> "(" "void" ")" "{" {<block-item>} "}"
 <block-item> ::= <statement> | <declaration>
 <declaration> ::= "int" <identifier> ["=" <exp>] ";"
-<statement> ::= "return" <exp> ";" | <exp> ";" | ";" | "if" "(" <exp> ")" <statement> ["else" <statement>]
-<exp> ::= <factor> | <exp> <binop> <exp>
+<statement> ::= "return" <exp> ";" | <exp> ";" | ";" | _"if" "(" <exp> ")" <statement> ["else" <statement>]_
+<exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
 <factor> ::= <int> | <identifier> | <unop> <factor> | <factor> <postop> | "(" <exp> ")" |
 <unop> ::= "-" | "~" | "!" | "++" | "--"
 <postop> ::= "++" | "--"
@@ -28,15 +28,15 @@ Notes:
 
 """
 
+import typing as t
 from contextlib import suppress
 from textwrap import dedent
-import typing as t
 
+import shared.data_types as dt
+import shared.pure_functions as pf
 from pydantic import BaseModel, RootModel
 
 from chapter6 import lexer
-import shared.pure_functions as pf
-import shared.data_types as dt
 
 
 class Program(BaseModel):
@@ -163,7 +163,7 @@ class Declaration(BaseModel):
         (next_token, *_), *rest = rest
         match next_token:
             case "=":
-                exp, rest = Expression.parse(rest)
+                exp, rest = Expression.from_tokens(rest)
 
                 (next, *_), *rest = rest
 
@@ -210,19 +210,25 @@ class ReturnStatement(BaseModel):
 
 class IfStatement(BaseModel):
     condition: Expression
+    then: Statement
     else_s: "Statement | None" = None
 
-    def __init__(self, tokens: lexer.Lexed):
-        super().__init__(condition="xD")
-        raise NotImplementedError
+    @t.override
+    def __repr__(self):
+        res = f"(if {repr(self.condition)}\n"
+        body = [repr(self.then)]
+        if self.else_s:
+            body.append(repr(self.else_s))
+        body = pf.indent("\n".join(body))
+        return f"{res}{body})"
 
 
 class Statement(BaseModel):
     """
-    <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
+    <statement> ::= "return" <exp> ";" | <exp> ";" | ";" | "if" "(" <exp> ")" <statement> ["else" <statement>]
     """
 
-    root: ReturnStatement | Expression | t.Literal["nope"]
+    root: ReturnStatement | Expression | t.Literal["nope"] | IfStatement
 
     @t.override
     def __repr__(self):
@@ -237,14 +243,39 @@ class Statement(BaseModel):
             return Statement(root="nope"), rest
 
         if next_token == "RETURN_KEYWORD":
-            exp, rest = Expression.parse(rest)
+            exp, rest = Expression.from_tokens(rest)
 
             (semicolon, *_), *rest = rest
             assert semicolon == "SEMICOLON", "Missing semicolon!"
             return Statement(root=ReturnStatement(exp=exp)), rest
 
+        if next_token == "IF_KEYWORD":
+            (open_parens, *_), *rest = rest
+            assert open_parens == "OPEN_PARENS", "I need some parens bro"
+            closed_parens = get_closing(rest, ")")
+            expression = Expression.from_tokens(
+                rest[:closed_parens], assert_no_food_left=True
+            )
+
+            statement = Statement.from_tokens(rest[closed_parens + 1 :])
+            assert statement, "An if needs a statement brother!"
+            then_stmt, rest = statement
+            else_stmt = None
+
+            next_token = ""
+            if rest:
+                (next_token, *_), *maybe = rest
+            if next_token == "ELSE_KEYWORD":
+                # Alrighty
+                statement = Statement.from_tokens(maybe)  # pyright: ignore[reportPossiblyUnboundVariable]
+                assert statement, "We need a statement after the else brother!"
+                else_stmt, rest = statement
+            return Statement(
+                root=IfStatement(condition=expression, then=then_stmt, else_s=else_stmt)
+            ), rest
+
         # Well then it must be an expression followed b a semicolon
-        exp, rest = Expression.parse(tokens)
+        exp, rest = Expression.from_tokens(tokens)
 
         (semicolon, *_), *rest = rest
         assert semicolon == "SEMICOLON", "Missing semicolon!"
@@ -252,7 +283,11 @@ class Statement(BaseModel):
 
 
 class Expression(BaseModel):
-    type: BinaryOp | Factor | FancyAssignment | NormalAssigment
+    """
+    <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
+    """
+
+    type: BinaryOp | Factor | FancyAssignment | NormalAssigment | Conditional
 
     @staticmethod
     def read_var(name: str):
@@ -264,7 +299,7 @@ class Expression(BaseModel):
 
     @t.overload
     @staticmethod
-    def parse(
+    def from_tokens(
         tokens: lexer.Lexed,
         assert_no_food_left: t.Literal[False] = False,
         min_prec: int = 0,
@@ -272,7 +307,7 @@ class Expression(BaseModel):
 
     @t.overload
     @staticmethod
-    def parse(
+    def from_tokens(
         tokens: lexer.Lexed, assert_no_food_left: t.Literal[True], min_prec: int = 0
     ) -> Expression:
         """
@@ -280,7 +315,7 @@ class Expression(BaseModel):
         """
 
     @staticmethod
-    def parse(
+    def from_tokens(
         tokens: lexer.Lexed, assert_no_food_left: bool = False, min_prec: int = 0
     ) -> tuple[Expression, lexer.Lexed] | Expression:
         def inner(
@@ -293,29 +328,49 @@ class Expression(BaseModel):
                 if operator not in BINARY_OP_PRECEDENCE.keys():
                     break
 
-                operator = t.cast(Binary_Operation, operator)
+                operator = t.cast(Binary_Op_Or_If_Expr, operator)
 
                 if BINARY_OP_PRECEDENCE[operator] < min_prec:
                     # Let the other nerds handle this!
                     break
 
                 # RIGHT ASSOCIATIVITY VS LEFT ASSOCIATIVITY
-                # See chapter6/README.md
+                # See chapter5/README.md
                 if operator in lexer.ASSIGNMENT_OPS:
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
-                    assert isinstance(left, Factor), (
-                        "For now - only identifiers can be on the left of assignment"
-                    )
-                    assert isinstance(left.type, Identifier), (
-                        "For now - only identifiers can be on the left of assignment"
-                    )
-                    identifier = left.type
+                    # TODO(Joaquim): The book wants me to do this check later on the `semantic-analysis` part
+                    # ...it feels a little wrong - but whatever.
+                    # match left:
+                    #     case Factor(type=Identifier()):
+                    #         pass
+                    #     case Conditional():
+                    #         pass
+                    #     case _:
+                    #         raise AssertionError(
+                    #             "For now - only identifiers can be on the left of assignment"
+                    #         )
+                    # assert isinstance(left, Factor), (
+                    #     "For now - only identifiers can be on the left of assignment"
+                    # )
+                    # assert isinstance(left.type, Identifier), (
+                    #     "For now - only identifiers can be on the left of assignment"
+                    # )
+                    identifier = Expression(type=left)
                     left = (
                         FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
                         if operator != "="
                         else NormalAssigment(lhs=identifier, rhs=rhs)
                     )
+                elif operator == "?":
+                    middle, rhs = inner(rest, 0)
+                    (colon, *_), *rhs = rhs
+                    assert colon == ":", "BAD IF EXPRESSION"
+                    right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
+                    left = Conditional(
+                        left=Expression(type=left), middle=middle, right=right
+                    )
+
                 else:
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
@@ -411,7 +466,7 @@ class Factor(BaseModel):
                     ]
 
                 return Factor(
-                    type=Expression.parse(
+                    type=Expression.from_tokens(
                         rest[:corresponding_closed], assert_no_food_left=True
                     )
                 ), rest[corresponding_closed + 1 :]
@@ -476,8 +531,15 @@ type Binary_Op_Without_Assignment = (
 
 type Binary_Operation = Binary_Op_Without_Assignment | lexer.Assignment_Ops
 
+type Binary_Op_Or_If_Expr = Binary_Operation | t.Literal["?"]
+"""
+According to _the book_ we can just re-use the code for binary-expressions here
+and treat `cond ? foo : bar` as a binary operator except that the operator is
+actually `? foo :`
+"""
 
-def _binary_op_precedence(op: Binary_Operation):
+
+def _binary_op_precedence(op: Binary_Op_Or_If_Expr):
     """
     The reference is:
     https://en.cppreference.com/w/c/language/operator_precedence.html
@@ -510,15 +572,19 @@ def _binary_op_precedence(op: Binary_Operation):
             return 100 - 11
         case "OR":
             return 100 - 12
+        case "?":
+            return 100 - 13
         case (
             "=" | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "/="
         ):
             return 100 - 14
 
 
-BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
+BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_If_Expr, int] = {
     op: _binary_op_precedence(op)
-    for op in t.cast(frozenset[Binary_Operation], pf.get_literal_vals(Binary_Operation))
+    for op in t.cast(
+        frozenset[Binary_Op_Or_If_Expr], pf.get_literal_vals(Binary_Op_Or_If_Expr)
+    )
 }
 
 
@@ -533,7 +599,7 @@ class BinaryOp(BaseModel):
 
 
 class NormalAssigment(BaseModel):
-    lhs: Identifier
+    lhs: LValue
     rhs: Expression
 
     @t.override
@@ -541,9 +607,29 @@ class NormalAssigment(BaseModel):
         return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
 
 
+class Conditional(BaseModel):
+    left: Expression
+    middle: Expression
+    right: Expression
+
+    @t.override
+    def __repr__(self):
+        res = f"(if-expr {repr(self.left)}\n"
+        body = pf.indent("\n".join(map(repr, [self.middle, self.right])))
+        return f"{res}{body})"
+
+
+type LValue = Expression
+"""
+This is wrong - not everything can be an lvalue But for some reason _THE BOOK_
+wants me to "just accept" expressions here and to see if they're a valid LValue
+later
+"""
+
+
 class FancyAssignment(BaseModel):
     type: lexer.Fancy_Assignment_Ops
-    lhs: Identifier
+    lhs: LValue
     rhs: Expression
 
     @t.override
