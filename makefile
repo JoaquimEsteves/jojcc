@@ -67,7 +67,7 @@ type_check:
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_5_final type_check
+test: $(VENV) $(MAKE_CACHE)/chapter_6_final type_check
 	@:
 .PHONY: test
 
@@ -153,8 +153,8 @@ ifeq ($(shell command -v prettier || false),)
 	$(info Could not format markdown files! Download prettier)
 else
 	prettier --write $(THIS_PREQ)
-	mkdir -p $(dir $(THIS_TARGET))
 endif
+	mkdir -p $(dir $(THIS_TARGET))
 	touch $(THIS_TARGET)
 
 
@@ -179,3 +179,4 @@ include chapter2/makefile
 include chapter3/makefile
 include chapter4/makefile
 include chapter5/makefile
+include chapter6/makefile

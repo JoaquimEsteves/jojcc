@@ -1,0 +1,581 @@
+"""
+AST Definition
+
+New shit in underscore
+
+```
+<program> ::= <function>
+<function> ::= "int" <identifier> "(" "void" ")" "{" {<block-item>} "}"
+<block-item> ::= <statement> | <declaration>
+<declaration> ::= "int" <identifier> ["=" <exp>] ";"
+<statement> ::= "return" <exp> ";" | <exp> ";" | ";" | "if" "(" <exp> ")" <statement> ["else" <statement>]
+<exp> ::= <factor> | <exp> <binop> <exp>
+<factor> ::= <int> | <identifier> | <unop> <factor> | <factor> <postop> | "(" <exp> ")" |
+<unop> ::= "-" | "~" | "!" | "++" | "--"
+<postop> ::= "++" | "--"
+<binop> ::= "-" | "+" | "*" | "/" | "%" | "&&" | "||"
+          | "==" | "!=" | "<" | "<=" | ">" | ">=" | "="
+          | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+<identifier> ::= ? An identifier token ?
+<int> ::= ? A constant token ?
+```
+
+Notes:
+
+> While parsing <block-item>, you need a way to tell whether the current block
+> item is a statement or a declaration. To do this, peek at the first token; if
+> it’s the int keyword, it’s a declaration, and otherwise it’s a statement.
+
+"""
+
+from contextlib import suppress
+from textwrap import dedent
+import typing as t
+
+from pydantic import BaseModel, RootModel
+
+from chapter6 import lexer
+import shared.pure_functions as pf
+import shared.data_types as dt
+
+
+class Program(BaseModel):
+    """
+    <program> ::= <function>
+    """
+
+    function: Function
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed):
+        return Program(function=Function.from_tokens(tokens))
+
+
+class Function(BaseModel):
+    """
+    <function> ::= "int"<identifier>"(""void"")""{"<statement>"}
+    """
+
+    return_type: CType
+    name: Identifier
+    body: list[Block_Item]
+
+    @t.override
+    def __repr__(self):
+        start = pf.indent(
+            dedent(
+                f"""
+                    (function
+                      ('name {self.name.root})
+                      ('return_type {self.return_type.root})
+                      ('body 
+                """
+            )
+        )
+        with pf.set_context(dt.INDENT_LEVEL, dt.INDENT_LEVEL.get() + 2):
+            body = pf.indent("\n".join(repr(b) for b in self.body))
+
+        return f"{start}{body})"
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed):
+        try:
+            (
+                type,
+                identifier,
+                (_, parens, _),
+                (_, void, _),
+                (_, closeparens, _),
+                (_, bracket, _),
+                *rest,
+            ) = tokens
+
+        except ValueError as e:
+            raise ValueError(
+                f"Nope, function must look like: {Function.__doc__}"
+            ) from e
+
+        assert parens == "(", "Where's the ( brother?"
+        assert void == "void", "Where's the void brother?"
+        assert closeparens == ")", "Where's the ) brother?"
+        assert closeparens == ")", "Where's the ) brother?"
+        assert bracket == "{", "Where's the { brother?"
+
+        closing_bracket_index = get_closing(rest, "}")
+
+        assert not rest[closing_bracket_index + 1 :], (
+            "How the heck is there more stuff after the last bracket?"
+        )
+
+        body = rest[0:closing_bracket_index]
+        parsed_body: list[Block_Item] = []
+
+        while body:
+            block_item = Declaration.from_tokens(body) or Statement.from_tokens(body)
+            if block_item is None:
+                raise ValueError("I accept declarations or statements!")
+            item, body = block_item
+            parsed_body.append(item)
+
+        return Function(
+            return_type=CType.from_tokens(type),
+            name=Identifier.from_tokens(identifier),
+            body=parsed_body,
+        )
+
+
+type Block_Item = Statement | Declaration
+
+
+class Declaration(BaseModel):
+    """
+    <declaration> ::= "int" <identifier> ["=" <exp>] ";"_
+    """
+
+    type: CType
+    name: Identifier
+    init: Expression | None
+
+    @t.override
+    def __repr__(self):
+        pre = f"(let {repr(self.name)}:{self.type.root}"
+        if not self.init:
+            return pre + ")"
+        return f"{pre} '{self.init or 'void'})"
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed] | None:
+        if len(tokens) < 2:
+            return None
+        type, identifier, *rest = tokens
+
+        ctype: CType | None = None
+        name: Identifier | None = None
+
+        with suppress(AssertionError):
+            ctype = CType.from_tokens(type)
+        with suppress(AssertionError):
+            name = Identifier.from_tokens(identifier)
+
+        if ctype is None or name is None:
+            return None
+
+        (next_token, *_), *rest = rest
+        match next_token:
+            case "=":
+                exp, rest = Expression.parse(rest)
+
+                (next, *_), *rest = rest
+
+                # Special case - I hate these nerds!
+                if next in ("++", "--"):
+                    assert isinstance(exp.type, Factor), "Not assignable"
+                    exp = Expression(
+                        type=Factor(
+                            type=Unary(
+                                type=next,
+                                exp=exp.type,
+                                pre=True,
+                            )
+                        )
+                    )
+                    (next, *_), *rest = rest
+
+                assert next == "SEMICOLON", "Missing semicolon!"
+
+                return Declaration(type=ctype, name=name, init=exp), rest
+            case "SEMICOLON":
+                return Declaration(type=ctype, name=name, init=None), rest
+            case _:
+                raise ValueError("Syntax error!")
+
+
+class CType(RootModel[str]):
+    # TODO(Joaquim): Get rid of this awfulness
+
+    @staticmethod
+    def from_tokens(token: lexer.Token_Lexed):
+        assert token[0] == "INT_KEYWORD", "I know of no other CTypes! Sorry"
+        assert token[1] == "int"
+        return CType(token[1])
+
+
+class ReturnStatement(BaseModel):
+    exp: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"(return {repr(self.exp)})"
+
+
+class IfStatement(BaseModel):
+    condition: Expression
+    else_s: "Statement | None" = None
+
+    def __init__(self, tokens: lexer.Lexed):
+        super().__init__(condition="xD")
+        raise NotImplementedError
+
+
+class Statement(BaseModel):
+    """
+    <statement> ::= "return" <exp> ";" | <exp> ";" | ";"
+    """
+
+    root: ReturnStatement | Expression | t.Literal["nope"]
+
+    @t.override
+    def __repr__(self):
+        return repr(self.root)
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed] | None:
+        (next_token, *_), *rest = tokens
+
+        if next_token == "SEMICOLON":
+            # ok
+            return Statement(root="nope"), rest
+
+        if next_token == "RETURN_KEYWORD":
+            exp, rest = Expression.parse(rest)
+
+            (semicolon, *_), *rest = rest
+            assert semicolon == "SEMICOLON", "Missing semicolon!"
+            return Statement(root=ReturnStatement(exp=exp)), rest
+
+        # Well then it must be an expression followed b a semicolon
+        exp, rest = Expression.parse(tokens)
+
+        (semicolon, *_), *rest = rest
+        assert semicolon == "SEMICOLON", "Missing semicolon!"
+        return Statement(root=exp), rest
+
+
+class Expression(BaseModel):
+    type: BinaryOp | Factor | FancyAssignment | NormalAssigment
+
+    @staticmethod
+    def read_var(name: str):
+        return Expression(type=Factor(type=Identifier(name)))
+
+    @t.override
+    def __repr__(self):
+        return repr(self.type)
+
+    @t.overload
+    @staticmethod
+    def parse(
+        tokens: lexer.Lexed,
+        assert_no_food_left: t.Literal[False] = False,
+        min_prec: int = 0,
+    ) -> tuple[Expression, lexer.Lexed]: ...
+
+    @t.overload
+    @staticmethod
+    def parse(
+        tokens: lexer.Lexed, assert_no_food_left: t.Literal[True], min_prec: int = 0
+    ) -> Expression:
+        """
+        If we specify `assert_no_food_left` then we assert that the tokens we _would_ return are empty.
+        """
+
+    @staticmethod
+    def parse(
+        tokens: lexer.Lexed, assert_no_food_left: bool = False, min_prec: int = 0
+    ) -> tuple[Expression, lexer.Lexed] | Expression:
+        def inner(
+            tokens: lexer.Lexed, min_prec: int = 0
+        ) -> tuple[Expression, lexer.Lexed]:
+            left, right = Factor.parse(tokens)
+            while right:
+                (operator, _identifier, _), *rest = right
+
+                if operator not in BINARY_OP_PRECEDENCE.keys():
+                    break
+
+                operator = t.cast(Binary_Operation, operator)
+
+                if BINARY_OP_PRECEDENCE[operator] < min_prec:
+                    # Let the other nerds handle this!
+                    break
+
+                # RIGHT ASSOCIATIVITY VS LEFT ASSOCIATIVITY
+                # See chapter6/README.md
+                if operator in lexer.ASSIGNMENT_OPS:
+                    # special case!
+                    rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
+                    assert isinstance(left, Factor), (
+                        "For now - only identifiers can be on the left of assignment"
+                    )
+                    assert isinstance(left.type, Identifier), (
+                        "For now - only identifiers can be on the left of assignment"
+                    )
+                    identifier = left.type
+                    left = (
+                        FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
+                        if operator != "="
+                        else NormalAssigment(lhs=identifier, rhs=rhs)
+                    )
+                else:
+                    # Don't quite understand this +1 if I must be honest
+                    rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
+                    left = BinaryOp(
+                        type=operator,  # pyright: ignore[reportArgumentType]
+                        lhs=Expression(type=left),
+                        rhs=rhs,
+                    )
+                right = other_rest
+
+            return Expression(type=left), right
+
+        exp, rest = inner(tokens, min_prec)
+        if assert_no_food_left:
+            assert rest == [], "We left food on the table!"
+            return exp
+        return exp, rest
+
+
+class Constant(RootModel[int]):
+    @t.override
+    def __repr__(self):
+        return str(self.root)
+
+
+class IncDec(BaseModel):
+    op: t.Literal["++", "--"]
+    pre_or_op: t.Literal["pre", "op"]
+    val: Identifier
+
+
+class Factor(BaseModel):
+    """
+    The name `factor` comes from the fact that this symbol can appear as a
+    _factor_ in a multiplication expression.
+
+    """
+
+    type: Constant | Unary | Expression | Identifier
+
+    @t.override
+    def __repr__(self):
+        match self.type:
+            case Constant(root=root):
+                return repr(root)
+            case Unary(type=type, exp=exp, pre=pre):
+                return f"({repr(type)} {repr(exp)} {'' if pre else 'postfix'})"
+            case Expression() | Identifier():
+                return repr(self.type)
+
+    @staticmethod
+    def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
+        (token, identifier, lineno), *rest = tokens
+        match token:
+            case "IDENTIFIER":
+                ident = Identifier.from_tokens((token, identifier, lineno))
+                exp = Factor(
+                    type=Identifier.from_tokens((token, identifier, lineno)),
+                )
+                # Peek to see if it's a post-op
+
+                if rest and rest[0][0] in ("++", "--"):
+                    (next, _, _), *hmm = rest
+                    rest = hmm
+                    return Factor(
+                        type=Unary(
+                            type=next,  # pyright: ignore[reportArgumentType]
+                            exp=exp,
+                            pre=False,
+                        ),
+                    ), rest
+
+                return Factor(
+                    type=ident,
+                ), rest
+            case "CONSTANT":
+                return Factor(
+                    type=Constant(identifier),  # pyright: ignore[reportArgumentType]
+                ), rest
+            case "OPEN_PARENS":
+                corresponding_closed = get_closing(rest, ")")
+                next_token = ""
+                with suppress(IndexError):
+                    next_token = rest[corresponding_closed + 1][0]
+                if next_token in ("++", "--"):
+                    # special case! I hate these nerds
+                    factor, food_left = Factor.parse(
+                        rest[:corresponding_closed] + [rest[corresponding_closed + 1]]
+                    )
+                    assert food_left == [], "We left food on the table!"
+                    return Factor(type=Expression(type=factor)), rest[
+                        corresponding_closed + 2 :
+                    ]
+
+                return Factor(
+                    type=Expression.parse(
+                        rest[:corresponding_closed], assert_no_food_left=True
+                    )
+                ), rest[corresponding_closed + 1 :]
+
+            case "COMPLEMENT" | "MINUS" | "NOT" | "++" | "--":
+                exp, rest = Factor.parse(rest)
+                return Factor(
+                    type=Unary(type=token, exp=exp),
+                ), rest
+            case _:
+                raise AssertionError(f"Syntax Error, unknown {token=} at {lineno=}")
+
+
+class Unary(BaseModel):
+    type: t.Literal[
+        "COMPLEMENT",
+        "MINUS",
+        "NOT",
+        "--",
+        "++",
+    ]
+    exp: Factor
+    pre: bool = True
+
+
+type Simple_Binary = t.Literal[
+    "MINUS",
+    "PLUS",
+    "ASTERISK",
+    "AMPERSAND",
+    "PIPE",
+    "CARRET",
+    "LEFT_SHIFT",
+    "RIGHT_SHIFT",
+]
+
+type Relational_Binary = t.Literal[
+    "LE",
+    "LT",
+    "GT",
+    "GE",
+    "==",
+    "!=",
+]
+
+type Jumpy_Binary_Op = t.Literal["AND", "OR"]
+"""
+These nerds are special, since they'll do a little jump
+and not execute the right-side (sometimes)
+"""
+
+
+type Binary_Op_Without_Assignment = (
+    Simple_Binary
+    | Relational_Binary
+    | t.Literal[
+        "FORWARD_SLASH",
+        "PERCENT",
+    ]
+    | Jumpy_Binary_Op
+)
+
+type Binary_Operation = Binary_Op_Without_Assignment | lexer.Assignment_Ops
+
+
+def _binary_op_precedence(op: Binary_Operation):
+    """
+    The reference is:
+    https://en.cppreference.com/w/c/language/operator_precedence.html
+
+    The code expects that higher -> more priority (reverse of the above reference)
+    So we just subtract some large number and we're off to the races
+
+    Note: We use a `match` just so that we don't forget any literal.
+    Type-checkers will then have our back.
+
+    """
+    match op:
+        case "ASTERISK" | "FORWARD_SLASH" | "PERCENT":
+            return 100 - 3
+        case "MINUS" | "PLUS":
+            return 100 - 4
+        case "LEFT_SHIFT" | "RIGHT_SHIFT":
+            return 100 - 5
+        case "LE" | "LT" | "GE" | "GT":
+            return 100 - 6
+        case "==" | "!=":
+            return 100 - 7
+        case "AMPERSAND":
+            return 100 - 8
+        case "CARRET":
+            return 100 - 9
+        case "PIPE":
+            return 100 - 10
+        case "AND":
+            return 100 - 11
+        case "OR":
+            return 100 - 12
+        case (
+            "=" | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>=" | "/="
+        ):
+            return 100 - 14
+
+
+BINARY_OP_PRECEDENCE: dict[Binary_Operation, int] = {
+    op: _binary_op_precedence(op)
+    for op in t.cast(frozenset[Binary_Operation], pf.get_literal_vals(Binary_Operation))
+}
+
+
+class BinaryOp(BaseModel):
+    type: Binary_Op_Without_Assignment
+    lhs: Expression
+    rhs: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"({self.type} {repr(self.lhs.type)} {repr(self.rhs.type)})"
+
+
+class NormalAssigment(BaseModel):
+    lhs: Identifier
+    rhs: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
+
+
+class FancyAssignment(BaseModel):
+    type: lexer.Fancy_Assignment_Ops
+    lhs: Identifier
+    rhs: Expression
+
+    @t.override
+    def __repr__(self):
+        return f"({self.type} {repr(self.lhs)} {repr(self.rhs.type)})"
+
+
+class Identifier(RootModel[str]):
+    @staticmethod
+    def from_tokens(token: lexer.Token_Lexed):
+        ltoken, identifier, _ = token
+        assert ltoken == "IDENTIFIER", "Not an identifier!"
+        # TODO(Joaquim): Add asserts for forbidden identifiers
+        # Stoping stuff like `True = False`
+        # Use pydantic
+        return Identifier(identifier)
+
+    @t.override
+    def __repr__(self):
+        return f"`{self.root}`"
+
+
+def get_closing(tokens: lexer.Lexed, closing_symbol: t.Literal["}", ")"]) -> int:
+    open_symbol = "{" if closing_symbol == "}" else "("
+    number_of_open = 1
+    number_of_closed = 0
+    for index, (_, lexed, _) in enumerate(tokens):
+        if lexed == closing_symbol:
+            number_of_closed += 1
+            if number_of_closed == number_of_open:
+                return index
+        if lexed == open_symbol:
+            number_of_open += 1
+
+    raise ValueError(f"Where's the '{closing_symbol}' brother?")

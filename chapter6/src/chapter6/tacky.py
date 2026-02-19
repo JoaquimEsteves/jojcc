@@ -48,7 +48,7 @@ from textwrap import dedent
 
 from pydantic import BaseModel
 
-from chapter5 import parser, semantic_analysis
+from chapter6 import parser, semantic_analysis
 from shared import data_types as dt
 from shared import pure_functions as pf
 
