@@ -623,7 +623,11 @@ type LValue = Expression
 """
 This is wrong - not everything can be an lvalue But for some reason _THE BOOK_
 wants me to "just accept" expressions here and to see if they're a valid LValue
-later
+later.
+
+In future chapters we'll look more in depth at what an `LVALUE` is, I (hope) that I can then
+just add some sort of annotation to clean up my classes, 'cos this whole `LValue` is any type #YOLO
+feels rough
 """
 
 

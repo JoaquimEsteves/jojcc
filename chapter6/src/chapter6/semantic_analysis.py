@@ -85,12 +85,35 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 )
             )
 
+        case parser.IfStatement(condition=condition, then=then, else_s=else_s):
+            return parser.Statement(
+                root=parser.IfStatement(
+                    condition=resolve_expression(condition),
+                    then=resolve_statement(then),
+                    else_s=resolve_statement(else_s) if else_s else None,
+                )
+            )
 
-def resolve_identifier(identifier: parser.Identifier):
-    name = identifier.root
+
+def resolve_identifier(identifier: parser.Identifier | parser.Expression):
+    match identifier:
+        case (
+            parser.Identifier(root=name)
+            | parser.Expression(type=parser.Factor(type=parser.Identifier(root=name)))
+        ):
+            pass
+        case _:
+            raise ValueError("For now, only identifiers can go here!")
+
     assert name in VARIABLE_MAP, "Unknown variable!"
-    new_name = VARIABLE_MAP[name]
-    return parser.Identifier(new_name)
+
+    return parser.Expression(
+        type=parser.Factor(
+            type=parser.Identifier(
+                root=VARIABLE_MAP[name],
+            )
+        )
+    )
 
 
 def resolve_factor(factor: parser.Factor) -> parser.Factor:
@@ -109,6 +132,14 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
 
 def resolve_expression(exp: parser.Expression) -> parser.Expression:
     match exp.type:
+        case parser.Conditional(left=left, middle=middle, right=right):
+            return parser.Expression(
+                type=parser.Conditional(
+                    left=resolve_expression(left),
+                    middle=resolve_expression(middle),
+                    right=resolve_expression(right),
+                )
+            )
         case parser.NormalAssigment(lhs=lhs, rhs=rhs):
             return parser.Expression(
                 type=parser.NormalAssigment(
