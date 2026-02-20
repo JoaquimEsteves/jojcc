@@ -70,8 +70,6 @@ class Function(BaseModel):
     @staticmethod
     def from_ast(ast: parser.Function, instructions: list[Instruction]):
         for line in ast.body:
-            if isinstance(line, parser.Statement) and line.root == "nope":
-                continue
             _ = emit_tacky(line, instructions)
         return Function(
             name=ast.name.root,

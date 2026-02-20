@@ -8,7 +8,12 @@ New shit in underscore
 <function> ::= "int" <identifier> "(" "void" ")" "{" {<block-item>} "}"
 <block-item> ::= <statement> | <declaration>
 <declaration> ::= "int" <identifier> ["=" <exp>] ";"
-<statement> ::= "return" <exp> ";" | <exp> ";" | ";" | _"if" "(" <exp> ")" <statement> ["else" <statement>]_
+<statement> ::= "return" <exp> ";"
+    | <exp> ";"
+    | ";"
+    | _"if" "(" <exp> ")" <statement> ["else" <statement>]_
+    | goto <identifier>;
+    | <identifier>: <statement>
 <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
 <factor> ::= <int> | <identifier> | <unop> <factor> | <factor> <postop> | "(" <exp> ")" |
 <unop> ::= "-" | "~" | "!" | "++" | "--"
@@ -34,7 +39,7 @@ from textwrap import dedent
 
 import shared.data_types as dt
 import shared.pure_functions as pf
-from pydantic import BaseModel, RootModel
+from pydantic import BaseModel, RootModel, model_validator
 
 from chapter6 import lexer
 
@@ -50,6 +55,10 @@ class Program(BaseModel):
     def from_tokens(tokens: lexer.Lexed):
         return Program(function=Function.from_tokens(tokens))
 
+    @t.override
+    def __str__(self):
+        return str(self.function)
+
 
 class Function(BaseModel):
     """
@@ -61,7 +70,7 @@ class Function(BaseModel):
     body: list[Block_Item]
 
     @t.override
-    def __repr__(self):
+    def __str__(self):
         start = pf.indent(
             dedent(
                 f"""
@@ -73,7 +82,7 @@ class Function(BaseModel):
             )
         )
         with pf.set_context(dt.INDENT_LEVEL, dt.INDENT_LEVEL.get() + 2):
-            body = pf.indent("\n".join(repr(b) for b in self.body))
+            body = pf.indent("\n".join(str(b) for b in self.body))
 
         return f"{start}{body})"
 
@@ -95,11 +104,15 @@ class Function(BaseModel):
                 f"Nope, function must look like: {Function.__doc__}"
             ) from e
 
-        assert parens == "(", "Where's the ( brother?"
+        assert parens == "(", (  # )
+            "Where's the ( brother?"  # )
+        )  # <- keep these here for vims indent
         assert void == "void", "Where's the void brother?"
         assert closeparens == ")", "Where's the ) brother?"
         assert closeparens == ")", "Where's the ) brother?"
-        assert bracket == "{", "Where's the { brother?"
+        assert bracket == "{", (
+            "Where's the { brother?"
+        )  # } }  <- keep these here for vims indent
 
         closing_bracket_index = get_closing(rest, "}")
 
@@ -115,6 +128,7 @@ class Function(BaseModel):
             if block_item is None:
                 raise ValueError("I accept declarations or statements!")
             item, body = block_item
+
             parsed_body.append(item)
 
         return Function(
@@ -137,8 +151,8 @@ class Declaration(BaseModel):
     init: Expression | None
 
     @t.override
-    def __repr__(self):
-        pre = f"(let {repr(self.name)}:{self.type.root}"
+    def __str__(self):
+        pre = f"(let {str(self.name)}:{self.type.root}"
         if not self.init:
             return pre + ")"
         return f"{pre} '{self.init or 'void'})"
@@ -204,8 +218,8 @@ class ReturnStatement(BaseModel):
     exp: Expression
 
     @t.override
-    def __repr__(self):
-        return f"(return {repr(self.exp)})"
+    def __str__(self):
+        return f"(return {str(self.exp)})"
 
 
 class IfStatement(BaseModel):
@@ -214,25 +228,30 @@ class IfStatement(BaseModel):
     else_s: "Statement | None" = None
 
     @t.override
-    def __repr__(self):
-        res = f"(if {repr(self.condition)}\n"
-        body = [repr(self.then)]
+    def __str__(self):
+        res = f"(if {str(self.condition)}\n"
+        body = [str(self.then)]
         if self.else_s:
-            body.append(repr(self.else_s))
+            body.append(str(self.else_s))
         body = pf.indent("\n".join(body))
         return f"{res}{body})"
 
 
 class Statement(BaseModel):
     """
-    <statement> ::= "return" <exp> ";" | <exp> ";" | ";" | "if" "(" <exp> ")" <statement> ["else" <statement>]
+    <statement> ::= "return" <exp> ";"
+        | <exp> ";"
+        | ";"
+        | _"if" "(" <exp> ")" <statement> ["else" <statement>]_
+        | goto <identifier>;
+        | <identifier>:
     """
 
-    root: ReturnStatement | Expression | t.Literal["nope"] | IfStatement
+    root: ReturnStatement | Expression | t.Literal["nope"] | IfStatement | Goto | Label
 
     @t.override
-    def __repr__(self):
-        return repr(self.root)
+    def __str__(self):
+        return str(self.root)
 
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed] | None:
@@ -274,12 +293,49 @@ class Statement(BaseModel):
                 root=IfStatement(condition=expression, then=then_stmt, else_s=else_stmt)
             ), rest
 
+        if next_token == "GOTO":
+            identifier, (semicolon, *_), *rest = rest
+            assert identifier[0] == "IDENTIFIER", (
+                "After a `goto` we need an identifier!"
+            )
+            assert semicolon == "SEMICOLON", "Where the semicolon at?!"
+
+            return Statement(root=Goto(label=Identifier.from_tokens(identifier))), rest
+        if next_token == "IDENTIFIER":
+            (colon, *_), *maybe = rest
+            if colon == ":":
+                child = Statement.from_tokens(maybe)
+                assert child is not None, "Nope! A label requires a statement"
+                child_stmt, rest = child
+                return Statement(
+                    root=Label(
+                        label=Identifier.from_tokens(tokens[0]), statement=child_stmt
+                    )
+                ), rest
+
         # Well then it must be an expression followed b a semicolon
         exp, rest = Expression.from_tokens(tokens)
 
         (semicolon, *_), *rest = rest
         assert semicolon == "SEMICOLON", "Missing semicolon!"
         return Statement(root=exp), rest
+
+
+class Goto(BaseModel):
+    label: Identifier
+
+    @t.override
+    def __str__(self):
+        return f"(goto {str(self.label)})"
+
+
+class Label(BaseModel):
+    label: Identifier
+    statement: Statement
+
+    @t.override
+    def __str__(self):
+        return f"(label {str(self.label)}\n{pf.indent(str(self.statement))})"
 
 
 class Expression(BaseModel):
@@ -289,13 +345,29 @@ class Expression(BaseModel):
 
     type: BinaryOp | Factor | FancyAssignment | NormalAssigment | Conditional
 
+    @model_validator(mode="after")
+    def fix_paren_jank(self):
+        """
+        Fixes situations like:
+
+        ```c
+        int a = ((((((((2))))))));
+        ```
+        """
+        match self.type:
+            case Factor(type=Expression(type=inner)):
+                self.type = inner
+            case _:
+                pass
+        return self
+
     @staticmethod
     def read_var(name: str):
         return Expression(type=Factor(type=Identifier(name)))
 
     @t.override
-    def __repr__(self):
-        return repr(self.type)
+    def __str__(self):
+        return str(self.type)
 
     @t.overload
     @staticmethod
@@ -339,23 +411,7 @@ class Expression(BaseModel):
                 if operator in lexer.ASSIGNMENT_OPS:
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
-                    # TODO(Joaquim): The book wants me to do this check later on the `semantic-analysis` part
-                    # ...it feels a little wrong - but whatever.
-                    # match left:
-                    #     case Factor(type=Identifier()):
-                    #         pass
-                    #     case Conditional():
-                    #         pass
-                    #     case _:
-                    #         raise AssertionError(
-                    #             "For now - only identifiers can be on the left of assignment"
-                    #         )
-                    # assert isinstance(left, Factor), (
-                    #     "For now - only identifiers can be on the left of assignment"
-                    # )
-                    # assert isinstance(left.type, Identifier), (
-                    #     "For now - only identifiers can be on the left of assignment"
-                    # )
+
                     identifier = Expression(type=left)
                     left = (
                         FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
@@ -392,7 +448,7 @@ class Expression(BaseModel):
 
 class Constant(RootModel[int]):
     @t.override
-    def __repr__(self):
+    def __str__(self):
         return str(self.root)
 
 
@@ -412,14 +468,14 @@ class Factor(BaseModel):
     type: Constant | Unary | Expression | Identifier
 
     @t.override
-    def __repr__(self):
+    def __str__(self):
         match self.type:
             case Constant(root=root):
-                return repr(root)
+                return str(root)
             case Unary(type=type, exp=exp, pre=pre):
-                return f"({repr(type)} {repr(exp)} {'' if pre else 'postfix'})"
+                return f"({str(type)} {str(exp)} {'' if pre else 'postfix'})"
             case Expression() | Identifier():
-                return repr(self.type)
+                return str(self.type)
 
     @staticmethod
     def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
@@ -594,8 +650,8 @@ class BinaryOp(BaseModel):
     rhs: Expression
 
     @t.override
-    def __repr__(self):
-        return f"({self.type} {repr(self.lhs.type)} {repr(self.rhs.type)})"
+    def __str__(self):
+        return f"({self.type} {str(self.lhs.type)} {str(self.rhs.type)})"
 
 
 class NormalAssigment(BaseModel):
@@ -603,8 +659,8 @@ class NormalAssigment(BaseModel):
     rhs: Expression
 
     @t.override
-    def __repr__(self):
-        return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
+    def __str__(self):
+        return f"(= {str(self.lhs)} {str(self.rhs.type)})"
 
 
 class Conditional(BaseModel):
@@ -613,13 +669,13 @@ class Conditional(BaseModel):
     right: Expression
 
     @t.override
-    def __repr__(self):
-        res = f"(if-expr {repr(self.left)}\n"
-        body = pf.indent("\n".join(map(repr, [self.middle, self.right])))
+    def __str__(self):
+        res = f"(if-expr {str(self.left)}\n"
+        body = pf.indent("\n".join(map(str, [self.middle, self.right])))
         return f"{res}{body})"
 
 
-type LValue = Expression
+LValue = t.Annotated["Expression | Identifier", "FIX ME LATER"]
 """
 This is wrong - not everything can be an lvalue But for some reason _THE BOOK_
 wants me to "just accept" expressions here and to see if they're a valid LValue
@@ -628,6 +684,8 @@ later.
 In future chapters we'll look more in depth at what an `LVALUE` is, I (hope) that I can then
 just add some sort of annotation to clean up my classes, 'cos this whole `LValue` is any type #YOLO
 feels rough
+
+Note: Making this _not_ a type is important or pydantic cries about a circular  reference schema
 """
 
 
@@ -637,8 +695,8 @@ class FancyAssignment(BaseModel):
     rhs: Expression
 
     @t.override
-    def __repr__(self):
-        return f"({self.type} {repr(self.lhs)} {repr(self.rhs.type)})"
+    def __str__(self):
+        return f"({self.type} {str(self.lhs)} {str(self.rhs.type)})"
 
 
 class Identifier(RootModel[str]):
@@ -652,7 +710,7 @@ class Identifier(RootModel[str]):
         return Identifier(identifier)
 
     @t.override
-    def __repr__(self):
+    def __str__(self):
         return f"`{self.root}`"
 
 

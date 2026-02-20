@@ -1,3 +1,6 @@
+import typing as t
+
+from collections import abc
 import chapter6.parser as parser
 
 VARIABLE_MAP: dict[str, str] = {}
@@ -5,8 +8,9 @@ VARIABLE_MAP: dict[str, str] = {}
 TODO(Joaquim): Use contextvar
 Various functions will no doubt declare their own little `i` variables
 """
+LABEL_MAP: dict[str, str] = {}
 
-Global_Counter: int = -1
+Global_Counter: int = 0
 """
 Will be used during tacky as well.
 This is to ensure that the tacky-boys don't somehow end up using the same
@@ -16,7 +20,9 @@ name as this one.
 
 def resolve_program(prog: parser.Program):
     func = prog.function
-    new_blocks = [resolve_block_item(block) for block in func.body]
+    new_blocks = check_labels_in_function(
+        [resolve_block_item(block) for block in func.body]
+    )
 
     if func.return_type.root == "int":
         # Ensures that there's always a return statement at the end
@@ -37,6 +43,42 @@ def resolve_program(prog: parser.Program):
     )
 
 
+def check_labels_in_function(body: list[parser.Block_Item]) -> list[parser.Block_Item]:
+    """
+    Checks for:
+    * using the same label for two labeled statements in the same function
+    """
+    found_labels: set[str] = set()
+    requested_labels: set[str] = set()
+
+    def match_stmt(stmt: parser.Statement):
+        match stmt.root:
+            case parser.Goto(label=label):
+                requested_labels.add(label.root)
+            case parser.Label(label=label, statement=inner):
+                if label.root in found_labels:
+                    raise ValueError(f"Label {item} declared multiple times!")
+                found_labels.add(label.root)
+                match_stmt(inner)
+            case parser.ReturnStatement() | parser.Expression() | "nope":
+                pass
+            case parser.IfStatement(then=then, else_s=else_s):
+                match_stmt(then)
+                if else_s:
+                    match_stmt(else_s)
+
+    for item in t.cast(
+        abc.Iterable[parser.Statement],
+        filter(lambda b: isinstance(b, parser.Statement), body),
+    ):
+        match_stmt(item)
+    if requested_labels - found_labels != set():
+        raise ValueError(
+            f"Missing some requested labels!\n{found_labels=}\n{requested_labels=}"
+        )
+    return body
+
+
 def resolve_block_item(block: parser.Block_Item):
     match block:
         case parser.Declaration():
@@ -46,20 +88,12 @@ def resolve_block_item(block: parser.Block_Item):
 
 
 def resolve_declaration(decl: parser.Declaration):
-    global Global_Counter
-
-    old_name = decl.name
-    if old_name.root in VARIABLE_MAP:
+    old_name = decl.name.root
+    if old_name in VARIABLE_MAP:
         raise ValueError("Duplicate name!")
 
-    # Note: We ensure that the new name is not valid-c
-    # Otherwise the variables `int a, a1` could both be renamed to
-    # `a12`
-    new_name = f"{decl.name.root}`{Global_Counter}"
-
-    Global_Counter += 1
-    VARIABLE_MAP[decl.name.root] = new_name
-
+    new_name = get_new_name(old_name)
+    VARIABLE_MAP[old_name] = new_name
     new_id = parser.Identifier(new_name)
 
     if decl.init is None:
@@ -68,6 +102,19 @@ def resolve_declaration(decl: parser.Declaration):
     new_exp = resolve_expression(decl.init)
 
     return parser.Declaration(type=decl.type, name=new_id, init=new_exp)
+
+
+def get_new_name(original: str, *, valid_c: bool = False):
+    global Global_Counter
+    # Note: We ensure that the new name is not valid-c
+    # Otherwise the variables `int a, a1` could both be renamed to
+    # `a12`
+    new_name = (
+        f"{original}_{Global_Counter}" if valid_c else f"{original}`{Global_Counter}"
+    )
+
+    Global_Counter += 1
+    return new_name
 
 
 def resolve_statement(stmt: parser.Statement) -> parser.Statement:
@@ -94,26 +141,61 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 )
             )
 
+        case parser.Goto(label=label):
+            return parser.Statement(root=parser.Goto(label=resolve_goto_label(label)))
 
-def resolve_identifier(identifier: parser.Identifier | parser.Expression):
-    match identifier:
-        case (
-            parser.Identifier(root=name)
-            | parser.Expression(type=parser.Factor(type=parser.Identifier(root=name)))
-        ):
-            pass
-        case _:
-            raise ValueError("For now, only identifiers can go here!")
-
-    assert name in VARIABLE_MAP, "Unknown variable!"
-
-    return parser.Expression(
-        type=parser.Factor(
-            type=parser.Identifier(
-                root=VARIABLE_MAP[name],
+        case parser.Label(label=label, statement=statement):
+            return parser.Statement(
+                root=parser.Label(
+                    label=resolve_goto_label(label),
+                    statement=resolve_statement(statement),
+                )
             )
-        )
+
+
+def resolve_assignable(
+    identifier: parser.Identifier | parser.Expression | parser.Factor,
+):
+    if isinstance(identifier, (parser.Expression, parser.Factor)):
+        current = identifier
+        # Solves situations like so:
+        # ((((((2))))))
+        #
+        # Note: This SHOULD have been taken care of before we hit this spot
+        # But just in case...
+        while hasattr(current, "type"):  # pyright: ignore[reportUnknownArgumentType]
+            current = current.type  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+        assert isinstance(current, parser.Identifier), f"{current} is not assignable!"
+        identifier = current
+
+    return parser.Expression(type=parser.Factor(type=resolve_identifier(identifier)))
+
+
+def resolve_goto_label(label: parser.Identifier):
+    return resolve_identifier(
+        label, where_to_check=LABEL_MAP, ok_to_not_be_declared=True, valid_c=False
     )
+
+
+def resolve_identifier(
+    identifier: parser.Identifier,
+    where_to_check: dict[str, str] = VARIABLE_MAP,
+    *,
+    ok_to_not_be_declared: bool = False,
+    valid_c: bool = False,
+):
+    """
+    In some cases - it's ok for our name to not be declared
+    """
+    name = identifier.root
+
+    if name not in where_to_check:
+        if ok_to_not_be_declared:
+            where_to_check[name] = get_new_name(name, valid_c=valid_c)
+        else:
+            raise ValueError(f"Identifier {name} not found!")
+
+    return parser.Identifier(root=where_to_check[name])
 
 
 def resolve_factor(factor: parser.Factor) -> parser.Factor:
@@ -123,10 +205,19 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
         case parser.Expression():
             return parser.Factor(type=resolve_expression(factor.type))
         case parser.Identifier():
-            return parser.Factor(type=resolve_identifier(factor.type))
+            return parser.Factor(type=resolve_assignable(factor.type))
         case parser.Unary(type=type, exp=exp, pre=pre):
+            if type not in ("++", "--"):
+                return parser.Factor(
+                    type=parser.Unary(type=type, exp=resolve_factor(exp), pre=pre)
+                )
+            # assert the boy is an lvalue
             return parser.Factor(
-                type=parser.Unary(type=type, exp=resolve_factor(exp), pre=pre)
+                type=parser.Unary(
+                    type=type,
+                    exp=resolve_assignable(exp).type,  # pyright: ignore[reportArgumentType]
+                    pre=pre,
+                )
             )
 
 
@@ -143,7 +234,7 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
         case parser.NormalAssigment(lhs=lhs, rhs=rhs):
             return parser.Expression(
                 type=parser.NormalAssigment(
-                    lhs=resolve_identifier(lhs),
+                    lhs=resolve_assignable(lhs),
                     rhs=resolve_expression(rhs),
                 )
             )
@@ -184,7 +275,7 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
 
             return parser.Expression(
                 type=parser.NormalAssigment(
-                    lhs=resolve_identifier(lhs),
+                    lhs=resolve_assignable(lhs),
                     rhs=resolve_expression(rhs),
                 )
             )

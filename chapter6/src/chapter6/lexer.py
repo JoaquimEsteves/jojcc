@@ -12,6 +12,8 @@ WHITESPACE = re.compile(r"\s")
 type Token = t.Literal[
     "INT_KEYWORD",
     "VOID_KEYWORD",
+    "GOTO",
+    "GOTO_LABEL",
     "IF_KEYWORD",
     "ELSE_KEYWORD",
     "RETURN_KEYWORD",
@@ -88,6 +90,8 @@ TOKEN_REGEX = t.cast(
                 "IF_KEYWORD": r"if\b",
                 "ELSE_KEYWORD": r"else\b",
                 "RETURN_KEYWORD": r"return\b",
+                "GOTO": r"goto\b",
+                "GOTO_LABEL": r"[a-zA-Z_]\w*:\b:",
                 "IDENTIFIER": r"[a-zA-Z_]\w*\b",
                 "CONSTANT": r"[0-9]+\b",
                 "OPEN_PARENS": r"\(",
