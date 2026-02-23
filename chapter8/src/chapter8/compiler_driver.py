@@ -1,0 +1,199 @@
+#!/usr/bin/env -S uv run --script
+import sys
+import typing as t
+from pathlib import Path
+import argparse
+import re
+import subprocess
+from textwrap import dedent
+
+from pydantic import RootModel
+
+from chapter8 import tacky
+from chapter8.lexer import lex
+import chapter8.parser as parser
+import chapter8.codegen as codegen
+import chapter8.semantic_analysis as semantic_analysis
+from shared import data_types as dt
+
+
+class PreProcessed(RootModel[Path]):
+    pass
+
+
+def preprocess(input_file: Path) -> PreProcessed:
+    assert input_file.exists(), "Dude - where is the file?"
+    # Traditionally PREPROCESSED_FILES have the `.i` extension
+    output_file = _file_extensions(input_file, ".c$", "i")
+
+    _ = subprocess.run(
+        [dt.COMPILER.get(), "-E", "-P", str(input_file), "-o", str(output_file)],
+        check=True,
+    )
+
+    return PreProcessed(output_file)
+
+
+def link(filename: Path, ass: codegen.Ass):
+    # Traditionally PREPROCESSED_FILES have the `.i` extension
+
+    assembly_path = _file_extensions(filename, ".c$", "s")
+    output_file = _file_extensions(filename, ".c$", "")
+
+    with open(assembly_path, "w") as f:
+        _ = f.write(ass.root)
+
+    _ = subprocess.run(
+        [dt.COMPILER.get(), str(assembly_path), "-o", str(output_file)],
+        check=True,
+    )
+    assembly_path.unlink()
+
+    assert output_file.exists(), "What happened yo?"
+    return output_file
+
+
+def _file_extensions(input_file: Path, remove: str, new: str):
+    assert input_file.exists(), "Dude - where is the file?"
+    tweaked_name = re.sub(remove, "", input_file.name)
+    if new:
+        tweaked_name = f"{tweaked_name}.{new}"
+
+    return input_file.parent / f"{tweaked_name}"
+
+
+class Args(t.NamedTuple):
+    filenames: list[Path]
+    lex: bool
+    parse: bool
+    validate: bool
+    codegen: bool
+    tacky: bool
+    S: bool
+
+
+def _arg_parse():
+    parser = argparse.ArgumentParser(
+        prog="jojcc",
+        description="Joaquim's Own Jank C Compiler",
+    )
+
+    _ = parser.add_argument(
+        "--lex",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer, but stop before parsing
+        """),
+    )
+    _ = parser.add_argument(
+        "--parse",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser, but stop before assembly generation
+        """),
+    )
+
+    _ = parser.add_argument(
+        "--validate",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser & semantic analysis, but stop before assembly generation
+        """),
+    )
+    _ = parser.add_argument(
+        "--tacky",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser & semantic analysis & tacky, but stop before assembly generation
+        """),
+    )
+    _ = parser.add_argument(
+        "--codegen",
+        action="store_true",
+        help=dedent("""\
+            Run the lexer & parser & semantic analysis & tacky & assembly generation, but stop before code emission
+        """),
+    )
+
+    # It's a TODO for future chapters
+    _ = parser.add_argument(
+        "-S",
+        action="store_true",
+        help=dedent("""\
+            Emit an assembly file, but don't assemble or link it.
+        """),
+    )
+
+    _ = parser.add_argument("filenames", nargs="+")
+
+    args = parser.parse_args()
+    filename = [Path(f) for f in args.filenames]  # pyright: ignore[reportAny]
+    assert all(f.exists() for f in filename), "{filename=} not found"
+    return Args(
+        **(args.__dict__ | {"filenames": filename}),
+    )
+
+
+type AST = list[str]
+
+
+def lexer(input: Path):
+    pre = preprocess(input)
+    with open(pre.root, "r") as f:
+        return pre, lex(f.read())
+
+
+def assembly_generation(_ast: codegen.Program) -> str:
+    return ""
+
+
+def main():
+    filenames, lex, parse, validate_f, codegen_f, tacky_f, S_flag = _arg_parse()
+
+    for filename in filenames:
+        _ = dt.CURRENT_FILE.set(filename)
+        # Only 'cat' if we're outputting to a terminal
+        # This allows us to run `compiler_driver.py > whatever.output`
+        if sys.stdout.isatty():
+            _ = subprocess.run(
+                [dt.CAT_PROGRAM, str(filename)],
+                check=True,
+            )
+
+        pre, lexed = lexer(filename)
+        pre.root.unlink()
+        if lex:
+            print(lexed)
+            continue
+        parsed = parser.Program.from_tokens(lexed)
+        if parse:
+            print(parsed)
+            continue
+        validated = semantic_analysis.resolve_program(parsed)
+        if validate_f:
+            print("Before")
+            print(parsed)
+            print("After")
+            print(validated)
+            continue
+        parsed = validated
+
+        tackified = tacky.Program.from_ast(parsed)
+        if tacky_f:
+            print(tackified)
+            continue
+        assembly_ast = codegen.parsed_to_assembly_construct(tackified)
+        if codegen_f:
+            print(assembly_ast)
+            continue
+        assembly_str = codegen.to_assembly(filename, assembly_ast)
+        if S_flag:
+            print(assembly_str.root)
+            continue
+
+        elf = link(filename, assembly_str)
+        print(f"compiled to {elf.absolute()}")
+
+
+if __name__ == "__main__":
+    main()

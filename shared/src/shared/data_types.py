@@ -9,6 +9,7 @@ import typing as t
 from pydantic import Field
 
 type LineNo = t.Annotated[int, Ge(0)]
+type CharNo = LineNo
 
 
 Identifier = t.Annotated[str, Field(pattern=r"^[a-zA-Z0-9_\.]+$")]

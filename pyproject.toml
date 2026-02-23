@@ -19,6 +19,7 @@ dependencies = [
     "pytest>=9.0.2",
     "chapter6",
     "chapter7",
+    "chapter8",
 ]
 
 [project.optional-dependencies]
@@ -39,6 +40,7 @@ members = [
     "chapter5",
     "chapter6",
     "chapter7",
+    "chapter8",
 ]
 
 [tool.uv.sources]
@@ -50,6 +52,7 @@ shared = { workspace = true }
 chapter5 = { workspace = true }
 chapter6 = { workspace = true }
 chapter7 = { workspace = true }
+chapter8 = { workspace = true }
 
 [tool.ruff]
 extend-exclude = [
