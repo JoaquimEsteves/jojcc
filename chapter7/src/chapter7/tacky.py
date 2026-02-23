@@ -89,6 +89,9 @@ def emit_tacky(
 
 def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) -> None:
     match stmt.root:
+        case parser.Block(body=body):
+            for line in body:
+                _ = emit_tacky(line, instructions)
         case parser.ReturnStatement(exp=expression):
             final = emit_exp(expression, instructions)
             instructions.append(Return(root=final))
@@ -143,22 +146,15 @@ def emit_exp(
             assert cond_val, "NOPE"
             return cond_val
 
-        case parser.NormalAssigment():
-            match exp.type:
+        case parser.NormalAssigment(lhs=lhs, rhs=rhs):
+            match lhs:
                 case (
-                    parser.NormalAssigment(lhs=parser.Identifier(root=name), rhs=rhs)
-                    | parser.NormalAssigment(
-                        lhs=parser.Expression(
-                            type=parser.Factor(type=parser.Identifier(root=name))
-                        ),
-                        rhs=rhs,
+                    parser.Identifier(root=name)
+                    | parser.Expression(
+                        type=parser.Factor(type=parser.Identifier(root=name))
                     )
                 ):
-                    var = Var(name=name)
-                    res = emit_exp(rhs, instructions)
-
-                    instructions.append(Copy(src=res, dest=var))
-                    return var
+                    return emit_copy_exp(Var(name=name), rhs, instructions)
                 case _:
                     raise ValueError("NOPE! Bad assignment")
         case parser.BinaryOp():
@@ -172,8 +168,10 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     The devil himself came up with them.
     """
     operation, factor, pre = unary_op.type, unary_op.exp, unary_op.pre
-    source = emit_exp(factor, instructions)
     destination: Value
+
+    source = emit_exp(factor, instructions)
+
     if operation not in ("++", "--"):
         destination = Var(name=_make_temp())
         instructions.append(
@@ -185,9 +183,23 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
         )
         return destination
 
+    # The expression itself has already been evaluaded up top
     current: t.Any = factor
-    while hasattr(current, "type"):  # pyright: ignore[reportAny]
-        current = current.type  # pyright: ignore[reportAny]
+    while not isinstance(current, parser.Identifier):
+        match factor.type:
+            case parser.Identifier():
+                current = factor.type
+            case parser.Unary():
+                # This is MEGA jank!
+                # It's here because `~(a)++` is assignable...
+                # So is ~~~!!!a++ (so on and so forth)
+                # I'm 1000% sure this is wrong, but we hadn't learned operators properly up until then
+                # I CAN'T wait to get rid of these silly nerds.
+                factor = factor.type.exp
+                current = factor.type
+            case _:
+                raise ValueError("Not assignable????")
+
     assert isinstance(current, parser.Identifier), f"{current} is not assignable!"
 
     # Note - at this stage this factor _MUST_ be an lvalue
@@ -203,22 +215,11 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     )
 
     if pre:
-        return emit_exp(
-            parser.Expression(
-                type=parser.NormalAssigment(lhs=current, rhs=intermediate_exp)
-            ),
-            instructions,
-        )
+        return emit_copy_exp(Var(name=current.root), intermediate_exp, instructions)
 
     destination = Var(name=_make_temp())
     instructions.append(Copy(src=source, dest=destination))
-
-    _ = emit_exp(
-        parser.Expression(
-            type=parser.NormalAssigment(lhs=current, rhs=intermediate_exp)
-        ),
-        instructions,
-    )
+    _ = emit_copy_exp(Var(name=current.root), intermediate_exp, instructions)
     return destination
 
 
@@ -363,6 +364,12 @@ def do_an_if_else(
     return result_var
 
 
+def emit_copy_exp(var: Var, exp: parser.Expression, instructions: list[Instruction]):
+    res = emit_exp(exp, instructions)
+    instructions.append(Copy(src=res, dest=var))
+    return var
+
+
 def _make_temp(label: str = "_TMP_"):
     semantic_analysis.Global_Counter += 1
     return f"{label}-{semantic_analysis.Global_Counter}"
@@ -393,7 +400,7 @@ class Function(BaseModel):
 
     @staticmethod
     def from_ast(ast: parser.Function, instructions: list[Instruction]):
-        for line in ast.body:
+        for line in ast.body.body:
             _ = emit_tacky(line, instructions)
         return Function(
             name=ast.name.root,

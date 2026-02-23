@@ -63,7 +63,7 @@ def _file_extensions(input_file: Path, remove: str, new: str):
 
 
 class Args(t.NamedTuple):
-    filename: Path
+    filenames: list[Path]
     lex: bool
     parse: bool
     validate: bool
@@ -78,7 +78,6 @@ def _arg_parse():
         description="Joaquim's Own Jank C Compiler",
     )
 
-    _ = parser.add_argument("filename")
     _ = parser.add_argument(
         "--lex",
         action="store_true",
@@ -125,11 +124,13 @@ def _arg_parse():
         """),
     )
 
+    _ = parser.add_argument("filenames", nargs="+")
+
     args = parser.parse_args()
-    filename = Path(args.filename)  # pyright: ignore[reportAny]
-    assert filename.exists(), f"{filename=} not found"
+    filename = [Path(f) for f in args.filenames]  # pyright: ignore[reportAny]
+    assert all(f.exists() for f in filename), "{filename=} not found"
     return Args(
-        **(args.__dict__ | {"filename": filename}),
+        **(args.__dict__ | {"filenames": filename}),
     )
 
 
@@ -147,50 +148,51 @@ def assembly_generation(_ast: codegen.Program) -> str:
 
 
 def main():
-    filename, lex, parse, validate_f, codegen_f, tacky_f, S_flag = _arg_parse()
+    filenames, lex, parse, validate_f, codegen_f, tacky_f, S_flag = _arg_parse()
 
-    _ = dt.CURRENT_FILE.set(filename)
-    # Only 'cat' if we're outputting to a terminal
-    # This allows us to run `compiler_driver.py > whatever.output`
-    if sys.stdout.isatty():
-        _ = subprocess.run(
-            [dt.CAT_PROGRAM, str(filename)],
-            check=True,
-        )
+    for filename in filenames:
+        _ = dt.CURRENT_FILE.set(filename)
+        # Only 'cat' if we're outputting to a terminal
+        # This allows us to run `compiler_driver.py > whatever.output`
+        if sys.stdout.isatty():
+            _ = subprocess.run(
+                [dt.CAT_PROGRAM, str(filename)],
+                check=True,
+            )
 
-    pre, lexed = lexer(filename)
-    pre.root.unlink()
-    if lex:
-        print(lexed)
-        return
-    parsed = parser.Program.from_tokens(lexed)
-    if parse:
-        print(parsed)
-        return
-    validated = semantic_analysis.resolve_program(parsed)
-    if validate_f:
-        print("Before")
-        print(parsed)
-        print("After")
-        print(validated)
-        return
-    parsed = validated
+        pre, lexed = lexer(filename)
+        pre.root.unlink()
+        if lex:
+            print(lexed)
+            continue
+        parsed = parser.Program.from_tokens(lexed)
+        if parse:
+            print(parsed)
+            continue
+        validated = semantic_analysis.resolve_program(parsed)
+        if validate_f:
+            print("Before")
+            print(parsed)
+            print("After")
+            print(validated)
+            continue
+        parsed = validated
 
-    tackified = tacky.Program.from_ast(parsed)
-    if tacky_f:
-        print(tackified)
-        return
-    assembly_ast = codegen.parsed_to_assembly_construct(tackified)
-    if codegen_f:
-        print(assembly_ast)
-        return
-    assembly_str = codegen.to_assembly(filename, assembly_ast)
-    if S_flag:
-        print(assembly_str.root)
-        return
+        tackified = tacky.Program.from_ast(parsed)
+        if tacky_f:
+            print(tackified)
+            continue
+        assembly_ast = codegen.parsed_to_assembly_construct(tackified)
+        if codegen_f:
+            print(assembly_ast)
+            continue
+        assembly_str = codegen.to_assembly(filename, assembly_ast)
+        if S_flag:
+            print(assembly_str.root)
+            continue
 
-    elf = link(filename, assembly_str)
-    print(f"compiled to {elf.absolute()}")
+        elf = link(filename, assembly_str)
+        print(f"compiled to {elf.absolute()}")
 
 
 if __name__ == "__main__":

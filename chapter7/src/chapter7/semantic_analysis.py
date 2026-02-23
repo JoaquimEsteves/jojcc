@@ -1,14 +1,9 @@
-import typing as t
+from contextvars import ContextVar
 
-from collections import abc
+from pydantic import BaseModel
+from shared import pure_functions as pf
+
 import chapter7.parser as parser
-
-VARIABLE_MAP: dict[str, str] = {}
-"""
-TODO(Joaquim): Use contextvar
-Various functions will no doubt declare their own little `i` variables
-"""
-LABEL_MAP: dict[str, str] = {}
 
 Global_Counter: int = 0
 """
@@ -18,15 +13,87 @@ name as this one.
 """
 
 
+class Variable_Map(BaseModel):
+    data: dict[str, MapEntry] = {}
+
+    class MapEntry(BaseModel):
+        """
+        Simply informs us if we can declare an item or not.
+        Example:
+
+        ```c
+        int foo = 1;
+        {
+            int foo = 2; // valid!
+        }
+        int foo = 2; // NOT VALID!
+        ```
+        """
+
+        name: str
+        from_current_block: bool = True
+
+    def valid_declaration(self, name: str):
+        if name not in self.data:
+            return True
+        if not self.data[name].from_current_block:
+            return True
+        return False
+
+    def __getitem__(self, name: str):
+        entry = self.data.get(name)
+        return entry.name if entry else None
+
+    def get_new_name(self, original: str, *, valid_c: bool = False):
+        new_name = _get_new_name(original, valid_c=valid_c)
+        self.data[original] = Variable_Map.MapEntry(name=new_name)
+
+        return new_name
+
+    def get_copy(self):
+        return Variable_Map(
+            data={
+                key: Variable_Map.MapEntry(name=val.name, from_current_block=False)
+                for key, val in self.data.items()
+            },
+        )
+
+
+class Label_Map(BaseModel):
+    """
+    Labels (unlike variable declarations) are quite simple.
+    Labels are unique per file. Simple as
+    """
+
+    data: dict[str, str] = {}
+
+    def valid_declaration(self, name: str):
+        if name not in self.data:
+            return True
+        return False
+
+    def __getitem__(self, name: str):
+        return self.data.get(name)
+
+    def get_new_name(self, original: str, *, valid_c: bool = False):
+        new_name = _get_new_name(original, valid_c=valid_c)
+        self.data[original] = new_name
+
+        return new_name
+
+
+Current_Variable_Map = ContextVar("Current_Variable_Map", default=Variable_Map())
+Current_Label_Map = ContextVar("Current_Label_Map", default=Label_Map())
+
+
 def resolve_program(prog: parser.Program):
     func = prog.function
-    new_blocks = check_labels_in_function(
-        [resolve_block_item(block) for block in func.body]
-    )
+    new_blocks = resolve_block(func.body)
+    _ = check_labels_in_program(new_blocks.body)
 
     if func.return_type.root == "int":
         # Ensures that there's always a return statement at the end
-        new_blocks.append(
+        new_blocks.body.append(
             parser.Statement(
                 root=parser.ReturnStatement(
                     exp=parser.Expression(type=parser.Factor(type=parser.Constant(0)))
@@ -43,16 +110,26 @@ def resolve_program(prog: parser.Program):
     )
 
 
-def check_labels_in_function(body: list[parser.Block_Item]) -> list[parser.Block_Item]:
+def resolve_block(body: parser.Block) -> parser.Block:
+    with pf.set_context(Current_Variable_Map, Current_Variable_Map.get().get_copy()):
+        return parser.Block(body=[resolve_block_item(block) for block in body.body])
+
+
+def check_labels_in_program(body: list[parser.Block_Item]):
     """
     Checks for:
-    * using the same label for two labeled statements in the same function
+    * using the same label for two labeled statements in the program function
     """
     found_labels: set[str] = set()
     requested_labels: set[str] = set()
 
-    def match_stmt(stmt: parser.Statement):
+    def match_stmt(stmt: parser.Block_Item):
+        if not isinstance(stmt, parser.Statement):
+            return
         match stmt.root:
+            case parser.Block(body=body):
+                for b in body:
+                    match_stmt(b)
             case parser.Goto(label=label):
                 requested_labels.add(label.root)
             case parser.Label(label=label, statement=inner):
@@ -67,16 +144,12 @@ def check_labels_in_function(body: list[parser.Block_Item]) -> list[parser.Block
                 if else_s:
                     match_stmt(else_s)
 
-    for item in t.cast(
-        abc.Iterable[parser.Statement],
-        filter(lambda b: isinstance(b, parser.Statement), body),
-    ):
+    for item in body:
         match_stmt(item)
     if requested_labels - found_labels != set():
         raise ValueError(
             f"Missing some requested labels!\n{found_labels=}\n{requested_labels=}"
         )
-    return body
 
 
 def resolve_block_item(block: parser.Block_Item):
@@ -89,11 +162,11 @@ def resolve_block_item(block: parser.Block_Item):
 
 def resolve_declaration(decl: parser.Declaration):
     old_name = decl.name.root
-    if old_name in VARIABLE_MAP:
+    variable_map = Current_Variable_Map.get()
+    if not variable_map.valid_declaration(old_name):
         raise ValueError("Duplicate name!")
 
-    new_name = get_new_name(old_name)
-    VARIABLE_MAP[old_name] = new_name
+    new_name = variable_map.get_new_name(old_name)
     new_id = parser.Identifier(new_name)
 
     if decl.init is None:
@@ -121,6 +194,9 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
     match stmt.root:
         case "nope":
             return stmt
+
+        case parser.Block():
+            return parser.Statement(root=resolve_block(stmt.root))
 
         case parser.Expression():
             return parser.Statement(root=resolve_expression(stmt.root))
@@ -163,23 +239,43 @@ def resolve_assignable(
         #
         # Note: This SHOULD have been taken care of before we hit this spot
         # But just in case...
-        while hasattr(current, "type"):  # pyright: ignore[reportUnknownArgumentType]
+        while hasattr(current, "type") and not isinstance(current.type, str):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
             current = current.type  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+        if isinstance(current, parser.Unary):
+            # Postfix and pre-fix operators being a PITA as usual
+            # This is a valid assignable value `~a++`
+            assert current.type not in ("++", "--")
+            return parser.Expression(
+                type=parser.Factor(
+                    type=parser.Unary(
+                        type=current.type,
+                        exp=resolve_assignable(current.exp).type,  # pyright: ignore[reportArgumentType, reportUnknownArgumentType, reportUnknownMemberType]
+                        pre=current.pre,
+                    )
+                )
+            )
         assert isinstance(current, parser.Identifier), f"{current} is not assignable!"
         identifier = current
 
-    return parser.Expression(type=parser.Factor(type=resolve_identifier(identifier)))
+    return parser.Expression(
+        type=parser.Factor(
+            type=resolve_identifier(identifier, Current_Variable_Map.get())
+        )
+    )
 
 
 def resolve_goto_label(label: parser.Identifier):
     return resolve_identifier(
-        label, where_to_check=LABEL_MAP, ok_to_not_be_declared=True, valid_c=False
+        label,
+        where_to_check=Current_Label_Map.get(),
+        ok_to_not_be_declared=True,
+        valid_c=False,
     )
 
 
 def resolve_identifier(
     identifier: parser.Identifier,
-    where_to_check: dict[str, str] = VARIABLE_MAP,
+    where_to_check: Label_Map | Variable_Map,
     *,
     ok_to_not_be_declared: bool = False,
     valid_c: bool = False,
@@ -189,13 +285,15 @@ def resolve_identifier(
     """
     name = identifier.root
 
-    if name not in where_to_check:
+    resolved_name = where_to_check[name]
+
+    if resolved_name is None:
         if ok_to_not_be_declared:
-            where_to_check[name] = get_new_name(name, valid_c=valid_c)
+            resolved_name = where_to_check.get_new_name(name, valid_c=valid_c)
         else:
             raise ValueError(f"Identifier {name} not found!")
 
-    return parser.Identifier(root=where_to_check[name])
+    return parser.Identifier(root=resolved_name)
 
 
 def resolve_factor(factor: parser.Factor) -> parser.Factor:
@@ -291,3 +389,15 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
                     rhs=resolve_expression(rhs),
                 )
             )
+
+
+def _get_new_name(original: str, *, valid_c: bool = False):
+    global Global_Counter
+    # Note: We ensure that the new name is not valid-c
+    # Otherwise the variables `int a, a1` could both be renamed to
+    # `a12`
+    new_name = (
+        f"{original}_{Global_Counter}" if valid_c else f"{original}`{Global_Counter}"
+    )
+    Global_Counter += 1
+    return new_name

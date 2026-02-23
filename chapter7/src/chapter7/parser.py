@@ -179,20 +179,6 @@ class Declaration(BaseModel):
 
                 (next, *_), *rest = rest
 
-                # Special case - I hate these nerds!
-                if next in ("++", "--"):
-                    assert isinstance(exp.type, Factor), "Not assignable"
-                    exp = Expression(
-                        type=Factor(
-                            type=Unary(
-                                type=next,
-                                exp=exp.type,
-                                pre=True,
-                            )
-                        )
-                    )
-                    (next, *_), *rest = rest
-
                 assert next == "SEMICOLON", "Missing semicolon!"
 
                 return Declaration(type=ctype, name=name, init=exp), rest
@@ -451,15 +437,26 @@ class Expression(BaseModel):
                 if operator not in BINARY_OP_PRECEDENCE.keys():
                     break
 
-                operator = t.cast(Binary_Op_Or_If_Expr, operator)
+                operator = t.cast(Binary_Op_Or_Extras, operator)
 
                 if BINARY_OP_PRECEDENCE[operator] < min_prec:
                     # Let the other nerds handle this!
                     break
 
+                if operator in ("++", "--"):
+                    # shit, I hate these nerds
+                    other_rest = rest
+                    left = Factor(
+                        type=Unary(
+                            type=operator,
+                            exp=left,  # pyright: ignore[reportArgumentType]
+                            pre=False,
+                        ),
+                    )
+
                 # RIGHT ASSOCIATIVITY VS LEFT ASSOCIATIVITY
                 # See chapter5/README.md
-                if operator in lexer.ASSIGNMENT_OPS:
+                elif operator in lexer.ASSIGNMENT_OPS:
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
@@ -503,12 +500,6 @@ class Constant(RootModel[int]):
         return str(self.root)
 
 
-class IncDec(BaseModel):
-    op: t.Literal["++", "--"]
-    pre_or_op: t.Literal["pre", "op"]
-    val: Identifier
-
-
 class Factor(BaseModel):
     """
     The name `factor` comes from the fact that this symbol can appear as a
@@ -523,8 +514,8 @@ class Factor(BaseModel):
         match self.type:
             case Constant(root=root):
                 return str(root)
-            case Unary(type=type, exp=exp, pre=pre):
-                return f"({str(type)} {str(exp)} {'' if pre else 'postfix'})"
+            case Unary():
+                return str(self.type)
             case Expression() | Identifier():
                 return str(self.type)
 
@@ -537,19 +528,6 @@ class Factor(BaseModel):
                 exp = Factor(
                     type=Identifier.from_tokens((token, identifier, lineno)),
                 )
-                # Peek to see if it's a post-op
-
-                if rest and rest[0][0] in ("++", "--"):
-                    (next, _, _), *hmm = rest
-                    rest = hmm
-                    return Factor(
-                        type=Unary(
-                            type=next,  # pyright: ignore[reportArgumentType]
-                            exp=exp,
-                            pre=False,
-                        ),
-                    ), rest
-
                 return Factor(
                     type=ident,
                 ), rest
@@ -559,19 +537,6 @@ class Factor(BaseModel):
                 ), rest
             case "OPEN_PARENS":
                 corresponding_closed = get_closing(rest, ")")
-                next_token = ""
-                with suppress(IndexError):
-                    next_token = rest[corresponding_closed + 1][0]
-                if next_token in ("++", "--"):
-                    # special case! I hate these nerds
-                    factor, food_left = Factor.parse(
-                        rest[:corresponding_closed] + [rest[corresponding_closed + 1]]
-                    )
-                    assert food_left == [], "We left food on the table!"
-                    return Factor(type=Expression(type=factor)), rest[
-                        corresponding_closed + 2 :
-                    ]
-
                 return Factor(
                     type=Expression.from_tokens(
                         rest[:corresponding_closed], assert_no_food_left=True
@@ -597,6 +562,10 @@ class Unary(BaseModel):
     ]
     exp: Factor
     pre: bool = True
+
+    @t.override
+    def __str__(self):
+        return f"({str(self.type)} {str(self.exp)} {'' if self.pre else 'postfix'})"
 
 
 type Simple_Binary = t.Literal[
@@ -638,7 +607,7 @@ type Binary_Op_Without_Assignment = (
 
 type Binary_Operation = Binary_Op_Without_Assignment | lexer.Assignment_Ops
 
-type Binary_Op_Or_If_Expr = Binary_Operation | t.Literal["?"]
+type Binary_Op_Or_Extras = Binary_Operation | t.Literal["?", "++", "--"]
 """
 According to _the book_ we can just re-use the code for binary-expressions here
 and treat `cond ? foo : bar` as a binary operator except that the operator is
@@ -646,7 +615,7 @@ actually `? foo :`
 """
 
 
-def _binary_op_precedence(op: Binary_Op_Or_If_Expr):
+def _binary_op_precedence(op: Binary_Op_Or_Extras):
     """
     The reference is:
     https://en.cppreference.com/w/c/language/operator_precedence.html
@@ -659,6 +628,8 @@ def _binary_op_precedence(op: Binary_Op_Or_If_Expr):
 
     """
     match op:
+        case "++" | "--":
+            return 100 - 1
         case "ASTERISK" | "FORWARD_SLASH" | "PERCENT":
             return 100 - 3
         case "MINUS" | "PLUS":
@@ -687,10 +658,10 @@ def _binary_op_precedence(op: Binary_Op_Or_If_Expr):
             return 100 - 14
 
 
-BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_If_Expr, int] = {
+BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_Extras, int] = {
     op: _binary_op_precedence(op)
     for op in t.cast(
-        frozenset[Binary_Op_Or_If_Expr], pf.get_literal_vals(Binary_Op_Or_If_Expr)
+        frozenset[Binary_Op_Or_Extras], pf.get_literal_vals(Binary_Op_Or_Extras)
     )
 }
 
