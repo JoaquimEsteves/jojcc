@@ -89,10 +89,8 @@ class Function(BaseModel):
                       """
             )
         )
-        with pf.set_context(dt.INDENT_LEVEL, 1):
-            str_body = str(self.body)
         with pf.set_context(dt.INDENT_LEVEL, 2):
-            body = pf.indent(str_body)
+            body = pf.indent(str(self.body))
         return f"{start}{body})"
 
     @staticmethod
@@ -193,10 +191,21 @@ class Declaration(BaseModel):
                 raise ValueError("Syntax error!")
 
 
-class While(BaseModel):
+class Labelelled_Loop(BaseModel):
+    """
+    Whenever we `continue/break` we need to know _which_ loop statement we're
+    actually breaking from.
+
+    Thus - the semantic analysis will just annotate each loop with some control
+    label that we can jump out/in of.
+    """
+
+    control_label: str = ""
+
+
+class While(Labelelled_Loop):
     condition: Expression
     body: Statement
-    control_label: str = ""
 
     @t.override
     def __str__(self):
@@ -208,10 +217,10 @@ class While(BaseModel):
         return "\n".join(res)
 
 
-class DoWhile(BaseModel):
-    condition: Expression
-    body: Statement
-    control_label: str = ""
+class DoWhile(While):
+    """
+    Note: Uses inheritance! So be careful when using `match-case`
+    """
 
     @t.override
     def __str__(self):
@@ -227,7 +236,7 @@ class DoWhile(BaseModel):
 type For_Init = Declaration | Expression | None
 
 
-class For(BaseModel):
+class For(Labelelled_Loop):
     """
     "for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>
     """
@@ -297,6 +306,11 @@ class For(BaseModel):
 
     @staticmethod
     def _get_for_init(tokens: lexer.Lexed) -> For_Init:
+        """
+        Handles `(init_exp?;...)` section of the for-loop.
+
+        Expects that the semicolon is passed
+        """
         if not tokens or len(tokens) == 1 and tokens[0][0] == "SEMICOLON":
             # Perfectly valid
             # for(; 1 ;) {...}
