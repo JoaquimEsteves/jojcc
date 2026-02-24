@@ -84,11 +84,13 @@ class Label_Map(BaseModel):
 
 Current_Variable_Map = ContextVar("Current_Variable_Map", default=Variable_Map())
 Current_Label_Map = ContextVar("Current_Label_Map", default=Label_Map())
+Current_Control_Label = ContextVar("Current_Control_Label", default="")
 
 
 def resolve_program(prog: parser.Program):
     func = prog.function
-    new_blocks = resolve_block(func.body)
+    with pf.set_context(Current_Variable_Map, Current_Variable_Map.get().get_copy()):
+        new_blocks = resolve_block(func.body)
     _ = check_labels_in_program(new_blocks.body)
 
     if func.return_type.root == "int":
@@ -111,8 +113,7 @@ def resolve_program(prog: parser.Program):
 
 
 def resolve_block(body: parser.Block) -> parser.Block:
-    with pf.set_context(Current_Variable_Map, Current_Variable_Map.get().get_copy()):
-        return parser.Block(body=[resolve_block_item(block) for block in body.body])
+    return parser.Block(body=[resolve_block_item(block) for block in body.body])
 
 
 def check_labels_in_program(body: list[parser.Block_Item]):
@@ -160,6 +161,16 @@ def resolve_block_item(block: parser.Block_Item):
             return resolve_statement(block)
 
 
+def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
+    match for_init:
+        case None:
+            return None
+        case parser.Declaration():
+            return resolve_declaration(for_init)
+        case parser.Expression():
+            return resolve_expression(for_init)
+
+
 def resolve_declaration(decl: parser.Declaration):
     old_name = decl.name.root
     variable_map = Current_Variable_Map.get()
@@ -195,8 +206,56 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
         case "nope":
             return stmt
 
+        case parser.Break() | parser.Continue():
+            if not (control_label := Current_Control_Label.get()):
+                raise ValueError("No control label found!")
+            cls = type(stmt.root)
+            return parser.Statement(root=cls(control_label=control_label))
+        case parser.For(init=init, condition=condition, post=post, body=body):
+            with (
+                pf.set_context(
+                    Current_Variable_Map, Current_Variable_Map.get().get_copy()
+                ),
+                pf.set_context(Current_Control_Label, _get_new_name("control_label")),
+            ):
+                init = resolve_for_init(init)
+                condition = resolve_expression(condition) if condition else None
+                post = resolve_expression(post) if post else None
+                body = resolve_statement(body)
+                return parser.Statement(
+                    root=parser.For(
+                        init=init,
+                        condition=condition,
+                        post=post,
+                        body=body,
+                        control_label=Current_Control_Label.get(),
+                    )
+                )
+        case (
+            parser.DoWhile(condition=condition, body=body)
+            | parser.While(condition=condition, body=body)
+        ):
+            with (
+                pf.set_context(
+                    Current_Variable_Map, Current_Variable_Map.get().get_copy()
+                ),
+                pf.set_context(Current_Control_Label, _get_new_name("control_label")),
+            ):
+                condition = resolve_expression(condition)
+                body = resolve_statement(body)
+                cls = type(stmt.root)
+                return parser.Statement(
+                    root=cls(
+                        body=body,
+                        condition=condition,
+                        control_label=Current_Control_Label.get(),
+                    )
+                )
         case parser.Block():
-            return parser.Statement(root=resolve_block(stmt.root))
+            with pf.set_context(
+                Current_Variable_Map, Current_Variable_Map.get().get_copy()
+            ):
+                return parser.Statement(root=resolve_block(stmt.root))
 
         case parser.Expression():
             return parser.Statement(root=resolve_expression(stmt.root))

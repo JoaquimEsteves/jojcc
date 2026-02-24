@@ -89,6 +89,8 @@ def emit_tacky(
 
 def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) -> None:
     match stmt.root:
+        case parser.DoWhile() | parser.While() | parser.For():
+            raise NotImplementedError("todo")
         case parser.Block(body=body):
             for line in body:
                 _ = emit_tacky(line, instructions)
@@ -113,10 +115,18 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 store_result=False,
             )
         case parser.Goto(label=label):
-            instructions.append(Jump(target=label.root.replace("`", "")))
+            instructions.append(Jump(target=pf.to_valid_c_name(label.root)))
         case parser.Label(label=label, statement=inner):
-            instructions.append(Label(identifier=label.root.replace("`", "")))
+            instructions.append(Label(identifier=pf.to_valid_c_name(label.root)))
             _match_statement(inner, instructions)
+        case parser.Continue(control_label=control_label):
+            instructions.append(
+                Jump(target=f"continue_{pf.to_valid_c_name(control_label)}")
+            )
+        case parser.Break(control_label=control_label):
+            instructions.append(
+                Jump(target=f"break_{pf.to_valid_c_name(control_label)}")
+            )
         case "nope":
             return None
 

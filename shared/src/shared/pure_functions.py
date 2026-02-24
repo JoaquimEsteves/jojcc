@@ -1,5 +1,6 @@
 from collections.abc import Sequence, Iterator
 from contextvars import ContextVar
+import re
 import typing as t
 import textwrap
 
@@ -71,3 +72,25 @@ def set_context[T](context: ContextVar[T], val: T):
     token = context.set(val)
     yield
     context.reset(token)
+
+
+def to_valid_c_name(text: str) -> dt.Identifier:
+    """
+    Converts variables to valid C identifiers
+
+    ```python
+    >>> to_valid_c_name('..valid_``name')
+    'valid_name'
+    >>> to_valid_c_name('valid_name')
+    'valid_name'
+    >>> to_valid_c_name('1``11``1')
+    ...
+    AssertionError: Was your string just numbers???
+    ```
+    """
+    quickly = "".join(re.findall(dt.Identifier_Pattern, text))
+    # Ensure the first character starts
+    while quickly and re.match(r"^[a-zA-Z]", quickly) is None:
+        quickly = quickly[1:]
+    assert quickly, "Was your string just numbers???"
+    return quickly

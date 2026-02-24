@@ -203,13 +203,27 @@ class Labelelled_Loop(BaseModel):
     control_label: str = ""
 
 
+class Break(Labelelled_Loop):
+    @t.override
+    def __str__(self):
+        return f"(break {self.control_label if self.control_label else ''})"
+
+
+class Continue(Labelelled_Loop):
+    @t.override
+    def __str__(self):
+        return f"(continue {self.control_label if self.control_label else ''})"
+
+
 class While(Labelelled_Loop):
     condition: Expression
     body: Statement
 
     @t.override
     def __str__(self):
-        res = [f"(while {self.condition}"]  # )
+        res = [
+            f"(while {self.control_label if self.control_label else ''} {self.condition}"
+        ]  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             res.append(pf.indent(str(self.body)) + ")")
@@ -224,7 +238,7 @@ class DoWhile(While):
 
     @t.override
     def __str__(self):
-        res = ["(do"]  # )
+        res = [f"(do {self.control_label if self.control_label else ''}"]  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             res.append(pf.indent(str(self.body)))
@@ -248,7 +262,7 @@ class For(Labelelled_Loop):
 
     @t.override
     def __str__(self):
-        res = "(for \n"  # )
+        res = f"(for {self.control_label if self.control_label else ''}\n"  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             start = pf.indent(
@@ -377,7 +391,9 @@ class Statement(BaseModel):
     root: (
         ReturnStatement
         | Expression
-        | t.Literal["nope", "break", "continue"]
+        | t.Literal["nope"]
+        | Break
+        | Continue
         | While
         | DoWhile
         | For
@@ -407,9 +423,9 @@ class Statement(BaseModel):
             case "SEMICOLON":
                 return Statement(root="nope"), rest
             case "BREAK_KEYWORD":
-                return Statement(root="break"), _next_is_semicolon(rest)
+                return Statement(root=Break()), _next_is_semicolon(rest)
             case "CONTINUE_KEYWORD":
-                return Statement(root="break"), _next_is_semicolon(rest)
+                return Statement(root=Continue()), _next_is_semicolon(rest)
             case "RETURN_KEYWORD":
                 exp, rest = Expression.from_tokens(rest)
                 return Statement(root=ReturnStatement(exp=exp)), _next_is_semicolon(

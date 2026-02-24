@@ -12,9 +12,11 @@ type LineNo = t.Annotated[int, Ge(0)]
 type CharNo = LineNo
 
 
-Identifier = t.Annotated[str, Field(pattern=r"^[a-zA-Z0-9_\.]+$")]
+Identifier_Pattern = r"[a-zA-Z0-9_\.]"
+Identifier = t.Annotated[str, Field(pattern=rf"^[a-zA-Z]{Identifier_Pattern}+$")]
 """
 Only letters, digits, periods, and underscores
+Must start with a letter
 """
 
 
