@@ -72,7 +72,7 @@ type_check:
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_7_final type_check
+test: $(VENV) $(MAKE_CACHE)/chapter_8_final type_check
 	@:
 .PHONY: test
 
@@ -94,7 +94,7 @@ endif
 	$(CC) -S -O -fno-asynchronous-unwind-tables -fcf-protection=none $(F) -o /dev/stdout
 .PHONY: ass
 
-debug:
+debug_driver:
 ifndef F
 	$(shell echo 1>&2 '$(debug_err_msg)')
 	$(error no argument)
@@ -107,7 +107,7 @@ endif
 	./driver -S debug.c > debug.asm
 	./driver debug.c
 	./debug
-.PHONY: debug
+.PHONY: debug_driver
 
 new_chapter:
 	./scripts/new_chapter.sh

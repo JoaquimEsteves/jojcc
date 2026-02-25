@@ -128,6 +128,14 @@ def check_labels_in_program(body: list[parser.Block_Item]):
         if not isinstance(stmt, parser.Statement):
             return
         match stmt.root:
+            case parser.Break() | parser.Continue():
+                pass
+            case (
+                parser.While(body=body)
+                | parser.DoWhile(body=body)
+                | parser.For(body=body)
+            ):
+                match_stmt(body)
             case parser.Block(body=body):
                 for b in body:
                     match_stmt(b)

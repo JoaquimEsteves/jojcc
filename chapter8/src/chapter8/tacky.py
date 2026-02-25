@@ -59,7 +59,7 @@ Label(end)
 import typing as t
 from textwrap import dedent
 
-from pydantic import BaseModel
+from pydantic import BaseModel, BeforeValidator
 
 from chapter8 import parser, semantic_analysis
 from shared import data_types as dt
@@ -89,8 +89,75 @@ def emit_tacky(
 
 def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) -> None:
     match stmt.root:
-        case parser.DoWhile() | parser.While() | parser.For():
-            raise NotImplementedError("todo")
+        case parser.DoWhile(
+            condition=condition, body=body, control_label=control_label
+        ):
+            start_label = Label(identifier=control_label)
+            instructions.append(start_label)
+            _ = emit_tacky(body, instructions)
+            instructions.append(Label.from_continue(control_label))
+
+            condition_result = emit_exp(condition, instructions)
+            instructions.extend(
+                (
+                    JumpIfNotZero(condition=condition_result, target=start_label),
+                    Label.from_break(control_label),
+                )
+            )
+
+        case parser.While(condition=condition, body=body, control_label=control_label):
+            continue_label = Label.from_continue(control_label)
+            break_label = Label.from_break(control_label)
+            instructions.append(continue_label)
+            condition_result = emit_exp(condition, instructions)
+            instructions.append(
+                JumpIfZero(condition=condition_result, target=break_label)
+            )
+            _ = emit_tacky(body, instructions)
+            instructions.extend(
+                (
+                    Jump(target=continue_label),
+                    break_label,
+                )
+            )
+
+        case parser.For(
+            init=init,
+            condition=condition,
+            post=post,
+            body=body,
+            control_label=control_label,
+        ):
+            if init:
+                _ = emit_tacky(init, instructions)
+            start_label = Label(identifier=control_label)
+            instructions.append(start_label)
+            continue_label = Label.from_continue(control_label)
+            break_label = Label.from_break(control_label)
+            if condition:
+                condition_result = emit_exp(condition, instructions)
+                instructions.append(
+                    JumpIfZero(condition=condition_result, target=break_label)
+                )
+            # From the book:
+            # If it [condition] is absent, the C standard says that this
+            # expression is “replaced by a nonzero constant” (section 6.8.5.3,
+            # paragraph 2)
+            # But the book also says that we can ignore that shit
+            # else:
+            #   instructions.append(
+            #      JumpIfZero(condition=parser.Constant(1), target=break_label)
+            #   )
+            _ = emit_tacky(body, instructions)
+            instructions.append(continue_label)
+            if post:
+                _ = emit_exp(post, instructions)
+            instructions.extend(
+                (
+                    Jump(target=start_label),
+                    break_label,
+                )
+            )
         case parser.Block(body=body):
             for line in body:
                 _ = emit_tacky(line, instructions)
@@ -120,13 +187,9 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
             instructions.append(Label(identifier=pf.to_valid_c_name(label.root)))
             _match_statement(inner, instructions)
         case parser.Continue(control_label=control_label):
-            instructions.append(
-                Jump(target=f"continue_{pf.to_valid_c_name(control_label)}")
-            )
+            instructions.append(Jump(target=Label.from_continue(control_label)))
         case parser.Break(control_label=control_label):
-            instructions.append(
-                Jump(target=f"break_{pf.to_valid_c_name(control_label)}")
-            )
+            instructions.append(Jump(target=Label.from_break(control_label)))
         case "nope":
             return None
 
@@ -390,6 +453,9 @@ def _make_label(label: str):
     return f"{label}.{semantic_analysis.Global_Counter}"
 
 
+type Valid_Identifier = t.Annotated[dt.Identifier, BeforeValidator(pf.to_valid_c_name)]
+
+
 class Program(BaseModel):
     function_def: "Function"
 
@@ -509,7 +575,10 @@ class Jump(BaseModel):
     So we increment a special `RIP` address by 5, hence skipping the movl
     """
 
-    target: dt.Identifier
+    # Note the order, we want to first match to `Label` and THEN try to convert
+    # it to a `Valid_Identifier`
+    # Otherwise the `Valid_Identifier` will crash out
+    target: Label | Valid_Identifier
 
 
 class JumpIfZero(Jump):
@@ -521,4 +590,12 @@ class JumpIfNotZero(Jump):
 
 
 class Label(BaseModel):
-    identifier: dt.Identifier
+    identifier: Valid_Identifier
+
+    @staticmethod
+    def from_break(label: str):
+        return Label(identifier=f"break_{pf.to_valid_c_name(label)}")
+
+    @staticmethod
+    def from_continue(label: str):
+        return Label(identifier=f"continue_{pf.to_valid_c_name(label)}")

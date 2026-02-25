@@ -63,28 +63,30 @@ do {
 } while (some_expression)
 ```
 
-```
-res = some_expr
-jumpifzero END
-call etc()
-END:
-...
-```
+Unsurprisingly, the `continue` goes to the `condition` on a `do_while` versus
+and on a normal `while` (ie: it doesn't jump straight to the statement)
 
-Versus
+```c
+int foo();
+int bar();
 
-```
-START:
-call etc()
-res = some_expr
-jumpifzero START
+do {
+ foo();
+label_for_continue: // a label at the end of a compound statement is valid only
+                    // for C23; but you get the point
+} while (bar());
+// VS
+label_for_continue:
+while(bar()) {
+   foo();
+}
 ```
 
 ## Careful with the goddamn scopes
 
 ```c
 int a = 5; // a0
-for ( int a = 0; a < 5; a = a + 1) { // a1
+for (int a = 0; a < 5; a = a + 1) { // a1
     int a = 1; // a3
     b = b + a;
 }

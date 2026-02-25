@@ -161,22 +161,26 @@ class Function(BaseModel):
                     instructions.extend(Mov.new(get_val(src), get_val(dest)))
 
                 case tacky.JumpIfZero(target=target, condition=condition):
+                    label = target if isinstance(target, str) else target.identifier
                     instructions.extend(
                         (
                             Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
-                            JmpCC(cond="e", label=target),
+                            JmpCC(cond="e", label=label),
                         )
                     )
                 case tacky.JumpIfNotZero(target=target, condition=condition):
+                    label = target if isinstance(target, str) else target.identifier
+
                     instructions.extend(
                         (
                             Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
-                            JmpCC(cond="ne", label=target),
+                            JmpCC(cond="ne", label=label),
                         )
                     )
 
                 case tacky.Jump(target=target):
-                    instructions.append(Jmp(root=target))
+                    label = target if isinstance(target, str) else target.identifier
+                    instructions.append(Jmp(root=label))
 
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
