@@ -89,6 +89,56 @@ def emit_tacky(
 
 def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) -> None:
     match stmt.root:
+        case parser.SwitchCase(label=label, body=body):
+            instructions.append(Label(identifier=label.root))
+            _match_statement(body, instructions)
+        case parser.Switch(
+            checker=checker,
+            associated_cases=associated_cases,
+            body=body,
+            control_label=control_label,
+        ):
+            checker_res = emit_exp(checker, instructions)
+            if isinstance(checker_res, Var):
+                checker_expr = parser.Expression.read_var(checker_res.name)
+            else:
+                checker_expr = parser.Expression(type=parser.Factor(type=checker_res))
+
+            end_of_switch_label = Label.from_break(control_label)
+            # By default we jump to where a `break` would jump to if none of our
+            # cases eval to true
+            final_jump = parser.Identifier(end_of_switch_label.identifier)
+
+            for case in associated_cases:
+                if isinstance(case.type, parser.SwitchCase.Default):
+                    # UNLESS - we find a default.
+                    # Note that semantic-analysis ensures that there's
+                    final_jump = case.label
+                    continue
+
+                goto = parser.Statement(root=parser.Goto(label=case.label))
+                _ = do_an_if(
+                    parser.Expression(
+                        type=parser.BinaryOp(
+                            type="==", lhs=checker_expr, rhs=case.type.check
+                        )
+                    ),
+                    goto,
+                    instructions,
+                    store_result=False,
+                )
+
+            # We always put the goto-default at the end
+            # This way if any of the previous ifs cocked up we can just go here
+            _match_statement(
+                parser.Statement(root=parser.Goto(label=final_jump)),
+                instructions,
+            )
+            _match_statement(body, instructions)
+            # We don't forget to add the control_label at the end
+            # (Otherwise `break` wouldn't do nothin')
+            instructions.append(end_of_switch_label)
+
         case parser.DoWhile(
             condition=condition, body=body, control_label=control_label
         ):
@@ -361,18 +411,24 @@ def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
 
 
 def do_an_if(
-    condition: parser.Expression,
+    condition: parser.Expression | Value,
     then: parser.Statement | parser.Expression,
     instructions: list[Instruction],
     *,
     store_result: bool,
 ):
-    condition_result = Var(name=_make_temp("condition_result"))
+    """
+    For convenience - also accepts some `Value` so we can re-use previous calculations
+    """
+    match condition:
+        case parser.Constant() | Var():
+            condition_result = condition
+        case parser.Expression():
+            condition_result = Var(name=_make_temp("condition_result"))
+            c = emit_exp(condition, instructions)
+            instructions.append(Copy(src=c, dest=condition_result))
     result_var = Var(name=_make_temp("result_var")) if store_result else None
     end_label = _make_label("end")
-
-    c = emit_exp(condition, instructions)
-    instructions.append(Copy(src=c, dest=condition_result))
 
     def store_the_res(res: Value | None):
         assert res is not None and result_var is not None, "Weeeeeeeeeird"
@@ -546,7 +602,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.src1)} {str(self.src2)})\n({self.operation} {str(self.src2)} {str(self.dest)})"
+        return f"({self.operation} {str(self.src1)} {str(self.src2)})\n(copy {str(self.dest)})"
 
 
 class Copy(BaseModel):
@@ -580,13 +636,25 @@ class Jump(BaseModel):
     # Otherwise the `Valid_Identifier` will crash out
     target: Label | Valid_Identifier
 
+    @t.override
+    def __str__(self):
+        return f"(jump {self.target})"
+
 
 class JumpIfZero(Jump):
     condition: Value
 
+    @t.override
+    def __str__(self):
+        return f"(jump {self.target} (== {self.condition} 0))"
+
 
 class JumpIfNotZero(Jump):
     condition: Value
+
+    @t.override
+    def __str__(self):
+        return f"(jump {self.target} (!= {self.condition} 0))"
 
 
 class Label(BaseModel):
@@ -599,3 +667,7 @@ class Label(BaseModel):
     @staticmethod
     def from_continue(label: str):
         return Label(identifier=f"continue_{pf.to_valid_c_name(label)}")
+
+    @t.override
+    def __str__(self):
+        return f"(label: {self.identifier})"

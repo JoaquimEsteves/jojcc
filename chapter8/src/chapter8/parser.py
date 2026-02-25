@@ -22,6 +22,10 @@ _<for-init> ::= <declaration> | [<exp>] ";"_
     | _"while" "(" <exp> ")" <statement>_
     | _"do" <statement> "while" "(" <exp> ")" ";"_
     | _"for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>_
+    | _switch(<expression>) <statement>_
+    | _<switch_type>_
+_<switch_type>_ ::= case <constant_expression>: {<statement>} | default: {<statement>}_
+_<constant_expression>  ::= <int>_
 <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
 <factor> ::= <int> | <identifier> | <unop> <factor> | <factor> <postop> | "(" <exp> ")" |
 <unop> ::= "-" | "~" | "!" | "++" | "--"
@@ -47,7 +51,7 @@ from textwrap import dedent
 
 import shared.data_types as dt
 import shared.pure_functions as pf
-from pydantic import BaseModel, RootModel, model_validator
+from pydantic import BaseModel, Field, RootModel, model_validator
 
 from chapter8 import lexer
 
@@ -155,9 +159,7 @@ class Declaration(BaseModel):
     @t.override
     def __str__(self):
         pre = f"(let {str(self.name)}:{self.type.root}"
-        if not self.init:
-            return pre + ")"
-        return f"{pre} '{self.init or 'void'})"
+        return f"{pre} '{self.init or 'undefined'})"
 
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed] | None:
@@ -191,7 +193,7 @@ class Declaration(BaseModel):
                 raise ValueError("Syntax error!")
 
 
-class Labelelled_Loop(BaseModel):
+class Labelled_Construct(BaseModel):
     """
     Whenever we `continue/break` we need to know _which_ loop statement we're
     actually breaking from.
@@ -203,19 +205,19 @@ class Labelelled_Loop(BaseModel):
     control_label: str = ""
 
 
-class Break(Labelelled_Loop):
+class Break(Labelled_Construct):
     @t.override
     def __str__(self):
         return f"(break {self.control_label if self.control_label else ''})"
 
 
-class Continue(Labelelled_Loop):
+class Continue(Labelled_Construct):
     @t.override
     def __str__(self):
         return f"(continue {self.control_label if self.control_label else ''})"
 
 
-class While(Labelelled_Loop):
+class While(Labelled_Construct):
     condition: Expression
     body: Statement
 
@@ -250,7 +252,7 @@ class DoWhile(While):
 type For_Init = Declaration | Expression | None
 
 
-class For(Labelelled_Loop):
+class For(Labelled_Construct):
     """
     "for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>
     """
@@ -386,6 +388,7 @@ class Statement(BaseModel):
         | "while" "(" <exp> ")" <statement>
         | "do" <statement> "while" "(" <exp> ")" ";"
         | "for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>
+        | switch(<expression) '{' {<declaration>} {<switch_type>} '}'
     """
 
     root: (
@@ -401,6 +404,8 @@ class Statement(BaseModel):
         | Goto
         | Label
         | Block
+        | Switch
+        | SwitchCase
     )
 
     @t.override
@@ -517,6 +522,12 @@ class Statement(BaseModel):
                     )
                 ), rest[closing_bracket_index + 1 :]
 
+            case "SWITCH_KEYWORD":
+                switch, rest = Switch.from_tokens(rest)
+                return Statement(root=switch), rest
+            case "CASE_KEYWORD" | "DEFAULT_KEYWORD":
+                case, rest = SwitchCase.from_tokens(tokens)
+                return Statement(root=case), rest
             case _:
                 # probably an expression
                 return get_back_expression()
@@ -553,16 +564,18 @@ class Block(BaseModel):
         parsed_body: list[Block_Item] = []
 
         while tokens:
-            block_item = Declaration.from_tokens(tokens) or Statement.from_tokens(
-                tokens
-            )
-            if block_item is None:
-                raise ValueError("I accept declarations or statements!")
-            item, tokens = block_item
+            item, tokens = Block.block_item_from_tokens(tokens)
 
             parsed_body.append(item)
 
         return Block(body=parsed_body)
+
+    @staticmethod
+    def block_item_from_tokens(tokens: lexer.Lexed) -> tuple[Block_Item, lexer.Lexed]:
+        block_item = Declaration.from_tokens(tokens) or Statement.from_tokens(tokens)
+        if block_item is None:
+            raise ValueError("I accept declarations or statements!")
+        return block_item
 
 
 class Expression(BaseModel):
@@ -587,6 +600,27 @@ class Expression(BaseModel):
             case _:
                 pass
         return self
+
+    def is_const_expression(self):
+        """
+        Technically - I'd like to just do this at parse-level (easily doable with Annotate and AfterValidator)
+        But the *BOOK* wants me to do that only at semantic-analysis time.
+        """
+        with suppress(ValueError):
+            _ = self.get_const_expression()
+            return True
+        return False
+
+    def get_const_expression(self):
+        match self.type:
+            case Factor(type=Constant(root=root)):
+                return root
+            # TODO: Stuff like `int a = 1;`
+            # is valid if `a` is `const` or the compiler can tell
+            # that no one else touched it
+            # For now - imma just not care
+            case _:
+                raise ValueError("Not a const expression bro!")
 
     @staticmethod
     def read_var(name: str):
@@ -926,6 +960,112 @@ class Identifier(RootModel[str]):
         return f"`{self.root}`"
 
 
+class Switch(Labelled_Construct):
+    """
+    switch(<expression>) <statement>
+    """
+
+    checker: Expression
+    body: Statement
+
+    associated_cases: list[SwitchCase] = []
+    """
+    This field gets populated during the `semantic_analysis`
+    Having explored godbolt the easiest way to convert this into IR is to
+    do
+
+    ```
+    v = checker()
+    if v == associated_cases[0]:
+        jump 0
+    if v == associated_cases[1]:
+        jump 1
+    ...etc
+    else:
+        jump default
+    ```
+    """
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed) -> tuple[Switch, lexer.Lexed]:
+        tokens = _next_is(tokens, "OPEN_PARENS")
+        closing_parens = get_closing(tokens, ")")
+        exp_tokens, rest = tokens[:closing_parens], tokens[closing_parens + 1 :]
+        checker = Expression.from_tokens(exp_tokens, assert_no_food_left=True)
+        stmt = Statement.from_tokens(rest)
+        assert stmt is not None, "No body!"
+        body, rest = stmt
+        return Switch(checker=checker, body=body), rest
+
+    @t.override
+    def __str__(self):
+        with pf.set_context(dt.INDENT_LEVEL, 1):
+            body = pf.indent(f"('checker {self.checker})\n{self.body}")
+        if self.associated_cases:
+            with pf.set_context(dt.INDENT_LEVEL, 2):
+                cases = pf.indent(
+                    "\n".join(map(str, (c.type for c in self.associated_cases)))
+                )
+            body = pf.indent(f"'(associated_cases \n{cases})\n") + body
+        return f"(switch \n{body})"
+
+
+class SwitchCase(Labelled_Construct):
+    """
+    <switch_type>_ ::= case <constant_expression>: {<statement>} | default: {<statement>}
+    """
+
+    class Case(BaseModel):
+        keyword: t.Literal["case"] = "case"
+        check: Expression
+
+        @t.override
+        def __str__(self):
+            return f"case '{self.check}"
+
+    class Default(BaseModel):
+        keyword: t.Literal["default"] = "default"
+
+        @t.override
+        def __str__(self):
+            return "default"
+
+    type: SwitchCase.Case | SwitchCase.Default = Field(discriminator="keyword")
+    body: Statement
+    label: Identifier = Identifier("")
+    """
+    This label is set during the semantic analysis
+    """
+
+    @t.override
+    def __str__(self):
+        with pf.set_context(dt.INDENT_LEVEL, 1):
+            body = pf.indent(str(self.body))
+        return (
+            f"({self.type} {self.control_label if self.control_label else ''} \n{body})"
+        )
+
+    @staticmethod
+    def from_tokens(tokens: lexer.Lexed) -> tuple[SwitchCase, lexer.Lexed]:
+        (keyword, *_), *rest = tokens
+        assert keyword in ("DEFAULT_KEYWORD", "CASE_KEYWORD"), (
+            "This should have been caught earlier brother!"
+        )
+        if keyword == "DEFAULT_KEYWORD":
+            rest = _next_is(rest, ":")
+            type = SwitchCase.Default()
+        else:
+            closing = get_closing(rest, ":")
+            expression_tokens, rest = rest[:closing], rest[closing + 1 :]
+            check = Expression.from_tokens(expression_tokens, assert_no_food_left=True)
+            type = SwitchCase.Case(check=check)
+
+        stmt = Statement.from_tokens(rest)
+        assert stmt, "I need a body!"
+        body, rest = stmt
+        return SwitchCase(type=type, body=body), rest
+
+
 def _next_is(tokens: lexer.Lexed, which: lexer.Token):
     try:
         (next, *_), *rest = tokens
@@ -939,18 +1079,20 @@ def _next_is_semicolon(tokens: lexer.Lexed):
     return _next_is(tokens, "SEMICOLON")
 
 
-def get_closing(tokens: lexer.Lexed, closing_symbol: t.Literal["}", ")", ";"]) -> int:
+def get_closing(
+    tokens: lexer.Lexed, closing_symbol: t.Literal["}", ")", ";", ":"]
+) -> int:
     """
     Given some opening symbol `(, {` find the closing symbol `) or }`.
 
-    Also works with `;` for convenience with the `for` loop
+    Also works with `;` and `:` for convenience with the `for` loop and the switch-case thing
     """
     match closing_symbol:
         case "}":
             open_symbol = "{"  # }
         case ")":
             open_symbol = "("  # )
-        case ";":
+        case ";" | ":":
             open_symbol = None
 
     number_of_open = 1

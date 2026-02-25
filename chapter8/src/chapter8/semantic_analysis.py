@@ -1,9 +1,11 @@
+import typing as t
+from contextlib import suppress
 from contextvars import ContextVar
 
 from pydantic import BaseModel
-from shared import pure_functions as pf
 
 import chapter8.parser as parser
+from shared import pure_functions as pf
 
 Global_Counter: int = 0
 """
@@ -82,14 +84,44 @@ class Label_Map(BaseModel):
         return new_name
 
 
-Current_Variable_Map = ContextVar("Current_Variable_Map", default=Variable_Map())
-Current_Label_Map = ContextVar("Current_Label_Map", default=Label_Map())
-Current_Control_Label = ContextVar("Current_Control_Label", default="")
+###############################################################################
+#                                                                             #
+#                                Context Vars                                 #
+#                                                                             #
+###############################################################################
+# They're globals with a cute little bow on top.
+# The advantage is that using the `set_context` function
+# we can have them be scoped trivially without a *BUNCH* of prop-drilling.
+VARIABLE_MAP = ContextVar("VARIABLE_MAP ", default=Variable_Map())
+LABEL_MAP = ContextVar("LABEL_MAP ", default=Label_Map())
+SWITCH_CONTROL_LABEL = ContextVar("SWITCH_CONTROL_LABEL ", default="")
+LOOP_CONTROL_LABEL = ContextVar("LOOP_CONTROL_LABEL ", default="")
+FOUND_CASES: ContextVar[dict[str, parser.SwitchCase]] = ContextVar(
+    "FOUND_CASES", default={}
+)
+MOST_RECENT_CONTROL_LABEL: ContextVar[ContextVar[str] | None] = ContextVar(
+    "MOST_RECENT ", default=None
+)
+"""
+Where do those damn breaks apply to
+"""
+
+
+def get_control_label(type: t.Literal["all", "loop", "switch"] = "all"):
+    match type:
+        case "all":
+            with suppress(AttributeError):
+                return MOST_RECENT_CONTROL_LABEL.get().get()  # pyright: ignore[reportOptionalMemberAccess]
+            return None
+        case "loop":
+            return LOOP_CONTROL_LABEL.get() or None
+        case "switch":
+            return SWITCH_CONTROL_LABEL.get() or None
 
 
 def resolve_program(prog: parser.Program):
     func = prog.function
-    with pf.set_context(Current_Variable_Map, Current_Variable_Map.get().get_copy()):
+    with pf.set_context(VARIABLE_MAP, VARIABLE_MAP.get().get_copy()):
         new_blocks = resolve_block(func.body)
     _ = check_labels_in_program(new_blocks.body)
 
@@ -134,6 +166,8 @@ def check_labels_in_program(body: list[parser.Block_Item]):
                 parser.While(body=body)
                 | parser.DoWhile(body=body)
                 | parser.For(body=body)
+                | parser.Switch(body=body)
+                | parser.SwitchCase(body=body)
             ):
                 match_stmt(body)
             case parser.Block(body=body):
@@ -181,7 +215,7 @@ def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
 
 def resolve_declaration(decl: parser.Declaration):
     old_name = decl.name.root
-    variable_map = Current_Variable_Map.get()
+    variable_map = VARIABLE_MAP.get()
     if not variable_map.valid_declaration(old_name):
         raise ValueError("Duplicate name!")
 
@@ -214,17 +248,19 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
         case "nope":
             return stmt
 
-        case parser.Break() | parser.Continue():
-            if not (control_label := Current_Control_Label.get()):
+        case parser.Break():
+            if not (control_label := get_control_label()):
                 raise ValueError("No control label found!")
-            cls = type(stmt.root)
-            return parser.Statement(root=cls(control_label=control_label))
+            return parser.Statement(root=parser.Break(control_label=control_label))
+        case parser.Continue():
+            if not (control_label := get_control_label("loop")):
+                raise ValueError("No control label found!")
+            return parser.Statement(root=parser.Continue(control_label=control_label))
         case parser.For(init=init, condition=condition, post=post, body=body):
             with (
-                pf.set_context(
-                    Current_Variable_Map, Current_Variable_Map.get().get_copy()
-                ),
-                pf.set_context(Current_Control_Label, _get_new_name("control_label")),
+                pf.set_context(VARIABLE_MAP, VARIABLE_MAP.get().get_copy()),
+                pf.set_context(LOOP_CONTROL_LABEL, _get_new_name("for_label")),
+                pf.set_context(MOST_RECENT_CONTROL_LABEL, LOOP_CONTROL_LABEL),
             ):
                 init = resolve_for_init(init)
                 condition = resolve_expression(condition) if condition else None
@@ -236,7 +272,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                         condition=condition,
                         post=post,
                         body=body,
-                        control_label=Current_Control_Label.get(),
+                        control_label=LOOP_CONTROL_LABEL.get(),
                     )
                 )
         case (
@@ -244,25 +280,22 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             | parser.While(condition=condition, body=body)
         ):
             with (
-                pf.set_context(
-                    Current_Variable_Map, Current_Variable_Map.get().get_copy()
-                ),
-                pf.set_context(Current_Control_Label, _get_new_name("control_label")),
+                pf.set_context(VARIABLE_MAP, VARIABLE_MAP.get().get_copy()),
+                pf.set_context(LOOP_CONTROL_LABEL, _get_new_name("while_label")),
+                pf.set_context(MOST_RECENT_CONTROL_LABEL, LOOP_CONTROL_LABEL),
             ):
                 condition = resolve_expression(condition)
                 body = resolve_statement(body)
-                cls = type(stmt.root)
+                cls = stmt.root.__class__
                 return parser.Statement(
                     root=cls(
                         body=body,
                         condition=condition,
-                        control_label=Current_Control_Label.get(),
+                        control_label=LOOP_CONTROL_LABEL.get(),
                     )
                 )
         case parser.Block():
-            with pf.set_context(
-                Current_Variable_Map, Current_Variable_Map.get().get_copy()
-            ):
+            with pf.set_context(VARIABLE_MAP, VARIABLE_MAP.get().get_copy()):
                 return parser.Statement(root=resolve_block(stmt.root))
 
         case parser.Expression():
@@ -295,6 +328,47 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 )
             )
 
+        case parser.Switch(checker=checker, body=body):
+            found_cases: dict[str, parser.SwitchCase] = {}
+            switch_label = _get_new_name("switch_label")
+            with (
+                pf.set_context(SWITCH_CONTROL_LABEL, switch_label),
+                pf.set_context(FOUND_CASES, found_cases),
+                pf.set_context(MOST_RECENT_CONTROL_LABEL, SWITCH_CONTROL_LABEL),
+            ):
+                checker = resolve_expression(checker)
+                body = resolve_statement(body)
+            return parser.Statement(
+                root=parser.Switch(
+                    checker=checker,
+                    body=body,
+                    associated_cases=list(found_cases.values()),
+                    control_label=switch_label,
+                )
+            )
+        case parser.SwitchCase(type=type, body=body):
+            if not (control_label := get_control_label("switch")):
+                raise ValueError("No control label found!")
+            body = resolve_statement(body)
+            # We have to make sure that these cases were not used already in the same context
+            found_cases = FOUND_CASES.get()
+            as_str = type.model_dump_json()
+            assert as_str not in found_cases, "This case was already found!"
+            match type:
+                case parser.SwitchCase.Case(check=check):
+                    assert check.is_const_expression(), "Not a constant expression bro!"
+                    type = parser.SwitchCase.Case(check=resolve_expression(check))
+                case parser.SwitchCase.Default():
+                    pass
+            resolved = parser.SwitchCase(
+                type=type,
+                body=body,
+                control_label=control_label,
+                label=parser.Identifier(_get_new_name("case")),
+            )
+            found_cases[as_str] = resolved
+            return parser.Statement(root=resolved)
+
 
 def resolve_assignable(
     identifier: parser.Identifier | parser.Expression | parser.Factor,
@@ -325,16 +399,14 @@ def resolve_assignable(
         identifier = current
 
     return parser.Expression(
-        type=parser.Factor(
-            type=resolve_identifier(identifier, Current_Variable_Map.get())
-        )
+        type=parser.Factor(type=resolve_identifier(identifier, VARIABLE_MAP.get()))
     )
 
 
 def resolve_goto_label(label: parser.Identifier):
     return resolve_identifier(
         label,
-        where_to_check=Current_Label_Map.get(),
+        where_to_check=LABEL_MAP.get(),
         ok_to_not_be_declared=True,
         valid_c=False,
     )
