@@ -20,6 +20,8 @@ wheels/
 Session.vim
 *.swp
 *.swo
+# Spell files
+.dialect.utf-8.add*
 
 #
 /debug

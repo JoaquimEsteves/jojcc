@@ -12,6 +12,7 @@ members = [
     "chapter6",
     "chapter7",
     "chapter8",
+    "chapter9",
     "jojcc",
     "shared",
 ]
@@ -85,6 +86,11 @@ source = { editable = "chapter7" }
 name = "chapter8"
 version = "0.1.0"
 source = { editable = "chapter8" }
+
+[[package]]
+name = "chapter9"
+version = "0.1.0"
+source = { editable = "chapter9" }
 
 [[package]]
 name = "colorama"
@@ -180,6 +186,7 @@ dependencies = [
     { name = "chapter6" },
     { name = "chapter7" },
     { name = "chapter8" },
+    { name = "chapter9" },
     { name = "ipython" },
     { name = "pydantic" },
     { name = "pytest" },
@@ -203,6 +210,7 @@ requires-dist = [
     { name = "chapter6", editable = "chapter6" },
     { name = "chapter7", editable = "chapter7" },
     { name = "chapter8", editable = "chapter8" },
+    { name = "chapter9", editable = "chapter9" },
     { name = "ipython" },
     { name = "pydantic", specifier = ">=2.12.5" },
     { name = "pytest", specifier = ">=9.0.2" },

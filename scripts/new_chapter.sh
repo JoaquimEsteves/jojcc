@@ -35,3 +35,4 @@ replace "chapter$latest_chapter" "chapter$latest_chapter" "chapter$next_chapter"
 cd "$(git rev-parse --show-toplevel)"
 
 uv add --workspace "./chapter$next_chapter"
+ln -sf "$(realpath "chapter$next_chapter/src/chapter$next_chapter"/compiler_driver.py)" driver
