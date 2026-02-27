@@ -13,18 +13,18 @@ program.c
 ┌──▼────┐
 │Parser │
 └──┬────┘
-┌──▼───────────────────┐
-│Semantic Analysis     │
-│╔═══════════════════╗ │
-│║Variable Resolution║ │
-│╚═══════════════════╝ │
-│╔═══════════════════╗ │
-│║   Type Checking   ║ │ <- New shit!
-│╚═══════════════════╝ │
-│╔═══════════════════╗ │
-│║  Loop Labelling   ║ │
-│╚═══════════════════╝ │
-└──┬───────────────────┘
+┌──▼────────────────────┐
+│Semantic Analysis      │
+│╔═════════════════════╗│
+│║Identifier Resolution║│ <- Renamed Shit!
+│╚═════════════════════╝│
+│╔═════════════════════╗│
+│║    Type Checking    ║│<- New shit!
+│╚═════════════════════╝│
+│╔═════════════════════╗│
+│║   Loop Labelling    ║│
+│╚═════════════════════╝│
+└──┬────────────────────┘
    │
    │  AST
    │
@@ -154,3 +154,6 @@ Then other object files can use that `whatever`. If two object files have a
 `.global whatever` then linkage fails.
 Internal linkage just means that we can define the same reference multiple times with the same name, but
 other object files can't reference the same thing.
+
+Of note for my little compiler is that I should _NOT_ rename things that are meant for external linkage.
+So for now - that means that functions _SHOULD NOT_ get their name changed.

@@ -71,7 +71,9 @@ def indent(text: str):
 def set_context[T](context: ContextVar[T], val: T):
     token = context.set(val)
     yield
+    # before = context.get()
     context.reset(token)
+    # print(f'popped context {before=} after={context.get()}')
 
 
 def to_valid_c_name(text: str) -> dt.Identifier:

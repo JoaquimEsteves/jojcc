@@ -81,7 +81,7 @@ class Program(BaseModel):
 
     @t.override
     def __str__(self):
-        return "".join(map(str, self.functions))
+        return "\n".join(map(str, self.functions))
 
 
 class Function_Declaration(BaseModel):
@@ -91,15 +91,21 @@ class Function_Declaration(BaseModel):
 
     return_type: CType
     name: Identifier
-    param_list: dict[Identifier, CType]
+    param_list: list[Variable_Declaration]
     body: Block | None
+
+    @model_validator(mode="after")
+    def ensure_no_init_in_param_list(self):
+        for param in self.param_list:
+            assert param.init is None, "In C you can't give a variable a default!"
+        return self
 
     @t.override
     def __str__(self):
         param_list = "'void"
         if self.param_list:
             param_list = str(
-                {str(key): str(val.root) for key, val in self.param_list.items()}
+                {param.name.root: param.type.root for param in self.param_list}
             ).replace("'", "")
             param_list = param_list.replace("'", "")
 
@@ -147,24 +153,26 @@ class Function_Declaration(BaseModel):
         if next_token == "{":  # }
             closing_bracket_index = get_closing(rest, "}")
             body = Block.from_tokens(rest[:closing_bracket_index])
-            the_fuck = rest[closing_bracket_index + 1 :]
+            rest = rest[closing_bracket_index + 1 :]
         else:
             assert next_token == "SEMICOLON", (
                 f"Nope, function must look like: {Function_Declaration.__doc__}"
             )
             body = None
-            the_fuck = rest
 
-        return Function_Declaration(
-            return_type=CType.from_tokens(type),
-            name=Identifier.from_tokens(identifier),
-            body=body,
-            param_list=param_list,
-        ), the_fuck
+        return (
+            Function_Declaration(
+                return_type=CType.from_tokens(type),
+                name=Identifier.from_tokens(identifier),
+                body=body,
+                param_list=param_list,
+            ),
+            rest,
+        )
 
     @staticmethod
-    def get_param_list(tokens: lexer.Lexed) -> dict[Identifier, CType]:
-        res: dict[Identifier, CType] = {}
+    def get_param_list(tokens: lexer.Lexed):
+        res: list[Variable_Declaration] = []
         rest: lexer.Lexed
         (parens, *_), *rest = tokens
         assert parens == "OPEN_PARENS", "Where's the ( brother?"  # )
@@ -179,7 +187,7 @@ class Function_Declaration(BaseModel):
             )  # will throw error if it's not correct
             identifier_token, *rest = rest
             identifier = Identifier.from_tokens(identifier_token)
-            res[identifier] = ctype
+            res.append(Variable_Declaration(type=ctype, name=identifier, init=None))
 
             (next_token, *_), *rest = rest
             if next_token == "CLOSE_PARENS":
@@ -381,14 +389,13 @@ class For(Labelled_Construct):
         return Expression.from_tokens(tokens_sans_semicolon, assert_no_food_left=True)
 
 
-class CType(RootModel[str]):
+class CType(RootModel[t.Literal["int"]]):
     # TODO(Joaquim): Get rid of this awfulness
 
     @staticmethod
     def from_tokens(token: lexer.Token_Lexed):
         assert token[0] == "INT_KEYWORD", "I know of no other CTypes! Sorry"
-        assert token[1] == "int"
-        return CType(token[1])
+        return CType(token[1])  # pyright: ignore[reportArgumentType]
 
 
 class ReturnStatement(BaseModel):
@@ -693,6 +700,10 @@ class Expression(BaseModel):
                 raise ValueError("Not a const expression bro!")
 
     @staticmethod
+    def from_constant(const: int):
+        return Expression(type=Factor(type=Constant(const)))
+
+    @staticmethod
     def read_var(name: str):
         return Expression(type=Factor(type=Identifier(name)))
 
@@ -869,7 +880,7 @@ class FuncCall(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.name} {' '.join(map(str, self.args))}"
+        return f"({self.name} {' '.join(map(str, self.args) if self.args else '()')})"
 
     @staticmethod
     def args_from_tokens(tokens: lexer.Lexed):
@@ -1171,9 +1182,8 @@ class SwitchCase(Labelled_Construct):
             check = Expression.from_tokens(expression_tokens, assert_no_food_left=True)
             type = SwitchCase.Case(check=check)
 
-        stmt = Statement.from_tokens(rest)
-        assert stmt, "I need a body!"
-        body, rest = stmt
+        body, rest = Statement.from_tokens(rest)
+
         return SwitchCase(type=type, body=body), rest
 
 
