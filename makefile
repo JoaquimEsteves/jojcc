@@ -72,7 +72,7 @@ type_check:
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_8_final type_check
+test: $(VENV) $(MAKE_CACHE)/chapter_9_final type_check
 	@:
 .PHONY: test
 
@@ -112,13 +112,6 @@ endif
 new_chapter:
 	./scripts/new_chapter.sh
 .PHONY: new_chapter
-
-###############################################################################
-#                                                                             #
-#                                   Targets                                   #
-#                                                                             #
-###############################################################################
-
 
 ###############################################################################
 #                                 Silly vars                                  #

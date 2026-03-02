@@ -121,7 +121,7 @@ class Function(BaseModel):
         return f"{start}{body})"
 
     @staticmethod
-    def from_tacky(func: tacky.Function):
+    def from_tacky(func: tacky.Function_Definition):
         stack_allocation = AllocateStack()
         instructions: list[Instruction] = [stack_allocation]
 
@@ -511,11 +511,13 @@ class Imm(BaseModel):
 
 class Reg(BaseModel):
     root: t.Literal[
-        "AX",
+        "AX",  # A -> ACCUMULATOR (for return values)
+        # The `X` was a placeholder for either H (high value) or L (low value)
+        # H for high-byte and L for low-byte
         "R10",
         "R11",
-        "DX",
-        "CL",  # Special for left-right-shift
+        "DX",  # D -> Data register
+        "CL",  # C(ount Register) Low-Byte Special for left-right-shift
     ]
     size: t.Literal[32, 8] = 32
 
@@ -528,15 +530,16 @@ class Reg(BaseModel):
     def to_assembly(self) -> str:
         match self.root, self.size:
             case "AX", 32:
-                return "%eax"
+                return "%eax"  # EAX -> E(xtented) A(ccumulator) X(placeholder)!
             case "AX", 8:
-                return "%al"
+                return "%al"  # AL -> Low-Byte Accumulator!!!
+                # This comes all the way from 8086 in 1979
             case "DX", 32:
                 return "%edx"
             case "DX", 8:
                 return "%dl"
             case "R10", 32:
-                return "%r10d"
+                return "%r10d"  # R -> Register 10
             case "R10", 8:
                 return "%r10b"
             case "R11", 32:

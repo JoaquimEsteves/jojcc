@@ -812,7 +812,7 @@ class Factor(BaseModel):
 
     """
 
-    type: Constant | Unary | Expression | Identifier | FuncCall
+    type: Constant | Unary | Expression | Identifier | Func_Call
 
     @t.override
     def __str__(self):
@@ -837,10 +837,10 @@ class Factor(BaseModel):
 
                 _, *rest = rest
                 corresponding_closed = get_closing(rest, ")")
-                arg_list = FuncCall.args_from_tokens(rest[:corresponding_closed])
+                arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
 
                 return (
-                    Factor(type=FuncCall(name=ident, args=arg_list)),
+                    Factor(type=Func_Call(name=ident, args=arg_list)),
                     rest[corresponding_closed + 1 :],
                 )
             case "CONSTANT":
@@ -874,7 +874,7 @@ class Factor(BaseModel):
         raise AssertionError(f"Syntax Error, unknown {token=} at {charno=}")
 
 
-class FuncCall(BaseModel):
+class Func_Call(BaseModel):
     name: Identifier
     args: list[Expression]
 

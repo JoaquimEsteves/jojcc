@@ -75,6 +75,10 @@ def emit_tacky(
     """
 
     match block:
+        case parser.Function_Declaration():
+            decl = Function_Definition.from_ast(block)
+            assert decl is None, "There should be no body here man!"
+            return
         case parser.Expression():
             return emit_exp(block, instructions)
         case parser.Statement():
@@ -249,6 +253,8 @@ def emit_exp(
     instructions: list[Instruction],
 ) -> Value:
     match exp.type:
+        case parser.Func_Call():
+            return emit_func_call(exp.type, instructions)
         case parser.Factor() | parser.Expression():
             return emit_exp(exp.type, instructions)
 
@@ -499,6 +505,21 @@ def emit_copy_exp(var: Var, exp: parser.Expression, instructions: list[Instructi
     return var
 
 
+def emit_func_call(func: parser.Func_Call, instructions: list[Instruction]) -> Value:
+    name = pf.to_valid_c_name(func.name.root)
+    args = [emit_exp(i, instructions) for i in func.args]
+    dest = Var(name=_make_temp())
+    instructions.append(
+        Func_Call(
+            name=name,
+            args=args,
+            dest=dest,
+        )
+    )
+
+    return dest
+
+
 def _make_temp(label: str = "_TMP_"):
     semantic_analysis.Global_Counter += 1
     return f"{label}-{semantic_analysis.Global_Counter}"
@@ -513,31 +534,39 @@ type Valid_Identifier = t.Annotated[dt.Identifier, BeforeValidator(pf.to_valid_c
 
 
 class Program(BaseModel):
-    function_def: "Function"
+    function_defs: list["Function_Definition"]
 
     @staticmethod
     def from_ast(prog: parser.Program):
-        instructions: list[Instruction] = []
-        return Program(function_def=Function.from_ast(prog.function, instructions))
+        function_defs = [
+            Function_Definition.from_ast(function) for function in prog.functions
+        ]
+        return Program(function_defs=[f for f in function_defs if f is not None])
 
     @t.override
     def __str__(self):
-        return str(self.function_def)
+        return "\n".join(map(str, self.function_defs))
 
 
-class Function(BaseModel):
-    name: str
-    instructions: "list[Instruction]"
+class Function_Definition(BaseModel):
+    name: Valid_Identifier
+    params: list[parser.CType]
+    instructions: list[Instruction]
     return_type: parser.CType
 
     @staticmethod
-    def from_ast(ast: parser.Function, instructions: list[Instruction]):
+    def from_ast(ast: parser.Function_Declaration):
+        if not ast.body:
+            return
+        # Note: each function has it's own list of instructions
+        body: list[Instruction] = []
         for line in ast.body.body:
-            _ = emit_tacky(line, instructions)
-        return Function(
+            _ = emit_tacky(line, body)
+        return Function_Definition(
+            params=[var.type for var in ast.param_list],
             name=ast.name.root,
             return_type=ast.return_type,
-            instructions=instructions,
+            instructions=body,
         )
 
     @t.override
@@ -558,8 +587,26 @@ class Function(BaseModel):
         return f"{start}{body})"
 
 
+class Func_Call(BaseModel):
+    name: Valid_Identifier
+    args: list[Value]
+    dest: Var
+
+    @t.override
+    def __str__(self):
+        return f"(= {self.dest} ({self.name} {' '.join(map(str, self.args) if self.args else '()')})"
+
+
 type Instruction = (
-    Return | Unary | BinaryOp | Copy | Jump | JumpIfZero | JumpIfNotZero | Label
+    Return
+    | Unary
+    | BinaryOp
+    | Copy
+    | Jump
+    | JumpIfZero
+    | JumpIfNotZero
+    | Label
+    | Func_Call
 )
 type Value = parser.Constant | Var
 

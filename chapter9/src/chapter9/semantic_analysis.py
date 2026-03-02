@@ -610,12 +610,12 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
                     pre=pre,
                 )
             )
-        case parser.FuncCall(name=parser.Identifier(root=name), args=args):
+        case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             identifier_table = IDENTIFIER_TABLE.get()
             assert identifier_table.valid_func_call(name), "Undeclared function!"
             new_name: str = identifier_table[name]  # pyright: ignore[reportAssignmentType]
             return parser.Factor(
-                type=parser.FuncCall(
+                type=parser.Func_Call(
                     name=parser.Identifier(new_name),
                     args=[resolve_expression(arg) for arg in args],
                 )
@@ -791,7 +791,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
     match exp.type:
         case parser.Identifier(root=name):
             type_check_identifier(exp.type)
-        case parser.FuncCall(name=parser.Identifier(root=name), args=args):
+        case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, tuple):
                 raise ValueError("Type Error!")
