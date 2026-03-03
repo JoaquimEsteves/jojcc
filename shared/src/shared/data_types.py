@@ -8,12 +8,14 @@ import typing as t
 
 from pydantic import Field
 
-type LineNo = t.Annotated[int, Ge(0)]
-type CharNo = LineNo
+type uInt = t.Annotated[int, Ge(0)]
+type Positive_Int = t.Annotated[int, Ge(1)]
+type LineNo = uInt
+type CharNo = uInt
 
 
 Identifier_Pattern = r"[a-zA-Z0-9_\.]"
-Identifier = t.Annotated[str, Field(pattern=rf"^[a-zA-Z]{Identifier_Pattern}*$")]
+Identifier = t.Annotated[str, Field(pattern=rf"^[_a-zA-Z]{Identifier_Pattern}*$")]
 """
 Only letters, digits, periods, and underscores
 Must start with a letter
@@ -22,12 +24,13 @@ Must start with a letter
 
 USE_ONLY_RBP = ContextVar(
     "USE_ONLY_RBP",
-    default=os.environ.get("USE_ONLY_RBP", "false").lower in ("true", "t"),
+    default=os.environ.get("USE_ONLY_RBP", "false").lower() in ("true", "t"),
 )
 """
 Funnily enough - the Registry-Stack-Pointer is a little bit useless
 We can do the whole thing with just `rbp`
 (Don't ask me how this works...)
+(In fact - it ONLY works if I _just_ use the `rbp`, DON'T ASK ME WHY EITHER)
 """
 
 DEBUG = ContextVar(
@@ -55,3 +58,79 @@ elif which("batcat"):
     CAT_PROGRAM = "batcat"  # pyright: ignore[reportConstantRedefinition]
 else:
     CAT_PROGRAM = "cat"  # pyright: ignore[reportConstantRedefinition]
+
+
+Oldest_School_Registers = t.Literal[
+    "A",  # A -> ACCUMULATOR (for return values)
+    "B",  # Base
+    "C",  # Counter
+    "D",  # Data
+]
+"""
+All the way from 1972!
+Crazy to think about that if this was released in 2026 we'd now be in 2080.
+"""
+# fmt: on
+
+
+# fmt: off
+Old_School_Registers = t.Literal[
+    "SP", # Stack Pointer
+    "BP", # Base Pointer
+    "SI", # Source Index
+    "DI", # Destination Index
+]
+# fmt: on
+
+New_School_Registers = t.Literal[
+    "R8",  # just boring numbers with no mnemonic
+    "R9",  # Definitely more sane...but still
+    "R10",
+    "R11",
+    "R12",
+    "R13",
+    "R14",
+    "R15",
+]
+
+
+@t.final
+class x64:
+    type Register = (
+        Oldest_School_Registers | Old_School_Registers | New_School_Registers
+    )
+    type Bit_Size = t.Literal[64, 32, 16, 8]
+    type Operation_Size = t.Literal["q", "l", "w", "b"]
+    """
+    b -> 1 byte
+    w -> word (2 bytes)
+    l -> long? Sometimes it's also double
+    q -> Quad, 4 bytes
+    """
+
+    from_bit_size: dict[Bit_Size, Operation_Size] = {
+        64: "q",
+        32: "l",
+        16: "w",
+        8: "b",
+    }
+    from_op_size: dict[Operation_Size, Bit_Size] = {
+        "q": 64,
+        "l": 32,
+        "w": 16,
+        "b": 8,
+    }
+
+    from_arg_number: dict[int, Register] = {
+        0: "DI",
+        1: "SI",
+        2: "D",
+        3: "C",
+        4: "R8",
+        5: "R9",
+    }
+
+    NUMBER_OF_REGISTER_ARGUMENTS = len(from_arg_number)
+    """
+    6
+    """

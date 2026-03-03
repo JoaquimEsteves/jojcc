@@ -177,7 +177,7 @@ contract that explains the following:
 
 [1]: System 5 came from Unix System 5, one of those old commercial Unixes
 
-### Argument Passing
+### Argument Passing & Cleanup
 
 The first 6 integer arguments to a function are passed through special registers.
 
@@ -193,6 +193,13 @@ The first 6 integer arguments to a function are passed through special registers
 Stuff that doesn't fit will then be shunted off to some pointer.
 If a function has more than 6 arguments, those are simply pushed to the stack.
 
+The 7th argument to a function is always at `16(%RBP)`[2], the 8th will depend on the size of the 7th[3].
+
+[2] Recall that at `%RBP` we'll have the the base-pointer of our caller and an
+instruction address, both of those are 64 bits, leading to 16 bytes.
+
+[3] Presuming that the 7th argument is an `int32`, then the 8th would be `16 + 32 / 8(%RBP)`, ie `24`.
+
 Note that the name these registers have is very tricky to memorize, I hate it!
 Here's [an article that goes into detail](https://keleshev.com/eax-x86-register-meaning-and-history/).
 Companion [hacker news discussion](https://news.ycombinator.com/item?id=22645910)
@@ -207,12 +214,14 @@ f(
    d,   # ECX
    e,   # R8D
    f,   # R9D
-   g,   # STACK[1]
-   h,   # STACK[0]
+   g,   # STACK[2 * 64 / 8] (ie: 16(%rbp))
+   h,   # STACK[2 * 64 / 8 + sizeof(g)] (ie: 24(%rbp))
 )
 ```
 
 Note that we must first push `h` and THEN `g`. The order is reversed.
+
+AFTER the function returns it's the job of the caller to pop any arguments from the stack
 
 ```pseudocode
 map = { 0: EDI, 1: ESI, ... }
@@ -222,7 +231,146 @@ for i in args.reversed():
       yield map[i]
    else:
       yield push_stack(i)
+call(func)
+for i in args.reversed():
+   if i in map:
+      pass
+   else:
+      pop()
 ```
+
+### Return Values
 
 Return value goes into `EAX` or `RAX` as usual
 (The `A` comes from the 1970s convention for _accumulator_)
+
+### Caller-Saved & Callee-Saved Registers
+
+If a register is _caller-saved_, the callee is allowed to overwrite it (So the
+caller has to copy it over somewhere if case they want to use it again)
+(These registers are `RAX, R10, R11`)
+
+If a register is _callee-saved_ then the callee can't mutate it, it must also be copied.
+(All others)
+
+So `caller/callee` tells us which can mutate the value.
+
+`caller-saved` -> `mut`
+`callee-saved` -> `const`
+
+### Stack Alignment
+
+System V ABI requires the stack to be 16-byte aligned (ie: the address RSP must be divisible by 128 BITS)
+Simplest way to do so is to just always align the stack to 16.
+
+(You can inspect the `RSP` and see if it's divisible by `0x10`)
+
+So - if for example we push some 32 int over to the stack we'd need to then push a bunch of extra stuff!
+
+```
+Stack = 0
+push 32_bit_int(12)
+assert stack % 128 # ERROR! Not 16-byte aligned
+# Instead we'd do:
+pushq 64_bit_register(12)
+subq 128 - 64
+# Hurray!
+```
+
+If, on the other hand we'd want to store 3 32 bit ints on the stack...well I
+have no idea I'll figure it out later.
+
+### Example
+
+```c
+int caller(int arg) {
+    return arg + fun(1, 2, 3, 4, 5, 6, 7, 8);
+}
+
+int fun(
+ int a, # 1
+ int b,
+ int c,
+ int d,
+ int e,
+ int f, # 6
+ int g, # stack
+ int h, # stack
+) {
+    return a + h;
+}
+```
+
+```asm
+    .globl caller
+caller:
+    # Caller received 1 argument `arg`
+    # This will be stored in `EDI`
+    # Since we want to remember our `arg` we need to store it on the stack.
+    # Note: Whenever we mess with the stack we use quad words.
+    # So we push `arg` using `RDI`
+    pushq   %rdi
+    # fix stack alignment
+    subq    $8, %rsp
+    # pass first six arguments in registers
+    movl    $1, %edi
+    movl    $2, %esi
+    movl    $3, %edx
+    movl    $4, %ecx
+    movl    $5, %r8d
+    movl    $6, %r9d
+    # pass last two arguments on the stack
+    pushq   $8
+    pushq   $7
+    # transfer control to fun
+    call    fun
+    # restore the stack and RDI
+    addq    $24, %rsp    # why 24?
+    popq    %rdi
+
+    .globl fun
+fun:
+    pushq   %rbp
+    movq    %rsp, %rbp
+    # copy first argument into EAX
+    movl    %edi, %eax
+    # add last argument to EAX
+    addl    24(%rbp), %eax
+    # epilogue
+    movq    %rbp, %rsp
+    popq    %rbp
+    ret
+```
+
+> Why 24?
+
+First we pushed 8 bytes onto the stack. To call `func` we'll also need to push an additional 16 bytes.
+
+So we have: `8 + 8 + 8 == 24`
+
+To align we merely push 8 bytes `24 % 16 = 8`
+
+| Stack Address | Content   | Instruction               |
+| ------------- | --------- | ------------------------- |
+| 0             | `RBP`     | (presumably) `pushq %rbp` |
+| 8             | `arg`     | `pushq %rdi`              |
+| 16            | `padding` | `subq $8, %rsp`           |
+| 24            | `g => 8`  | `pushq $8`                |
+| 32            | `h => 7`  | `pushq $7`                |
+
+### The `call` instruction
+
+`call fun` will do a couple of things.
+
+- Pushes the address of the instruction that follows it, the return address, onto the stack
+- Copies the label `fun`'s address over to the `Instruction Pointer` (`RIP`)
+
+In effect:
+
+```asm
+call fun    # Instruction address: 0x01
+one_right_after # instruction address: 0x02 (0x01 + 1)
+# same-as (except we can't touch the %RIP directly)
+pushq 0x02 %rbp  # So we know where to jump back to!
+movl address_of(fun) %rip
+```

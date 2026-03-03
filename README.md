@@ -34,7 +34,7 @@ See the makefile
 
 [Confused about the naming convention of registers? So was I!](https://keleshev.com/eax-x86-register-meaning-and-history/)
 
-_1979_
+8 bit in 1972, 16 bit in 1979
 
 ```
 ◄─ 16 Bit ─►   Mnemonic                   ◄═8 BIT═► (each box!)
@@ -56,6 +56,10 @@ _1979_
  ├──────┤
  │  DI  │       DESTINATION INDEX            NOPE!
  └──────┘
+
+ ┌──────┐
+ │  IP  │       Instruction Pointer          NOPE?
+ └──────┘       (Can't be touched by us)
 ```
 
 H stands for `HIGH` and `L` stands for low!
@@ -82,7 +86,7 @@ _1985_
  ├─────┤
  │ ... │
  ├─────┤
- │ EDI │
+ │ EIP │
  └─────┘
 ```
 
@@ -99,7 +103,7 @@ R just stands for REGISTER, which is stupid since `E` (the smaller) stands for E
  ╠═════╣
  ║ ... ║
  ╠═════╣
- ║ RDI ║
+ ║ RIP ║
  ╚═════╝
 ```
 

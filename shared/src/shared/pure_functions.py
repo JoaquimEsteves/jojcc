@@ -94,7 +94,7 @@ def to_valid_c_name(text: str) -> dt.Identifier:
     assert isinstance(text, str), "Pydantic made a mistake brother!"
     quickly = "".join(re.findall(dt.Identifier_Pattern, text))
     # Ensure the first character starts
-    while quickly and re.match(r"^[a-zA-Z]", quickly) is None:
+    while quickly and re.match(r"^[_a-zA-Z]", quickly) is None:
         quickly = quickly[1:]
     assert quickly, "Was your string just numbers???"
     return quickly

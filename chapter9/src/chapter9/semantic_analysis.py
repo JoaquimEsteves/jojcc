@@ -162,6 +162,9 @@ class Symbol_Table(BaseModel):
         type: Symbol_Table.Type
         already_defined: bool
 
+    def is_external(self, name: str):
+        return not self.data[name].already_defined
+
     def __getitem__(self, name: str):
         return self.data.get(name)
 
@@ -258,9 +261,9 @@ class Label_Map(BaseModel):
                         match_stmt(else_s)
 
         # Every function will have it's own label-map
-        with pf.set_context(LABEL_MAP, Label_Map()):
-            for item in body:
-                match_stmt(item)
+        for item in body:
+            match_stmt(item)
+
         if requested_labels - found_labels != set():
             raise ValueError(
                 f"Missing some requested labels!\n{found_labels=}\n{requested_labels=}"
@@ -308,11 +311,13 @@ it a context-variable just to make testing a little easier.
 
 def resolve_program(prog: parser.Program):
     def fix_functions(original: parser.Function_Declaration):
-        fixed = resolve_function_declaration(original)
-        if not fixed.body:
-            return fixed
-
-        Label_Map.check_labels_in_function(fixed)
+        # Important that the `LABEL_MAP` gets redefined _before_ `resolve_function_declaration`
+        # As it's _that_ function that changes the names of all of the labels
+        with pf.set_context(LABEL_MAP, Label_Map()):
+            fixed = resolve_function_declaration(original)
+            Label_Map.check_labels_in_function(fixed)
+            if not fixed.body:
+                return fixed
 
         if fixed.return_type.root == "int":
             # Ensures that there's always a return statement at the end

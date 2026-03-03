@@ -550,7 +550,7 @@ class Program(BaseModel):
 
 class Function_Definition(BaseModel):
     name: Valid_Identifier
-    params: list[parser.CType]
+    params: list[tuple[Var, parser.CType]]
     instructions: list[Instruction]
     return_type: parser.CType
 
@@ -563,7 +563,7 @@ class Function_Definition(BaseModel):
         for line in ast.body.body:
             _ = emit_tacky(line, body)
         return Function_Definition(
-            params=[var.type for var in ast.param_list],
+            params=[(Var(name=var.name.root), var.type) for var in ast.param_list],
             name=ast.name.root,
             return_type=ast.return_type,
             instructions=body,
