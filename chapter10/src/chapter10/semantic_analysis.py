@@ -35,8 +35,7 @@ class Identifier_Table(BaseModel):
 
         ```c
         int foo(int bar, int baz); // Valid (has linkage)
-        int foo(int wow, int valid); // Valid
-        int foo(void); // Invalid - but NOT checked here!
+        int foo(int wow, int valid); // Valid (who cares about warnings)
         ```
         """
 
@@ -47,12 +46,31 @@ class Identifier_Table(BaseModel):
         def from_current_scope(self) -> bool:
             return self.scope == IDENTIFIER_TABLE.get().scope
 
-    def valid_variable_declaration(self, name: str):
+    def assert_valid_variable_declaration(self, decl: parser.Variable_Declaration):
+        name = decl.name.root
         if name not in self.data:
-            return True
-        if not self.data[name].from_current_scope():
-            return True
-        return False
+            return
+        prev = self.data[name]
+        if not prev.from_current_scope():
+            return
+
+        match prev.has_linkage, decl.storage:
+            case False, None:
+                err = f"Redefinition of '{name}'"
+            case False, "static":
+                err = f"Redefinition of '{name}'. Old one is still in scope brother!"
+            case False, "extern":
+                err = f"Extern declaration of '{name}' follows non-extern declaration"
+            case True, None:
+                err = f"Non-extern declaration of '{name}' follows extern declaration"
+            case True, "static":
+                err = f"Static declaration of '{name}' follows non-static declaration"
+            case True, "extern":
+                # They refer to the same object
+                err = None
+
+        if err:
+            raise AssertionError(err)
 
     def valid_function_declaration(self, func: parser.Function_Declaration):
         name = func.name.root
@@ -101,9 +119,9 @@ class Identifier_Table(BaseModel):
 
         return new_name
 
-    def add_func(self, func: parser.Function_Declaration):
-        self.data[func.name.root] = Identifier_Table.Identifier(
-            name=func.name.root,
+    def add_external(self, decl: parser.Declaration):
+        self.data[decl.name.root] = Identifier_Table.Identifier(
+            name=decl.name.root,
             has_linkage=True,
         )
 
@@ -156,16 +174,15 @@ class Symbol_Table(BaseModel):
 
     data: dict[str, Symbol] = {}
 
-    type Type = parser.CType | tuple[parser.CType, tuple[parser.CType, ...]]
-
-    class Symbol(BaseModel):
-        type: Symbol_Table.Type
-        already_defined: bool
-
     def is_external(self, name: str):
-        return not self.data[name].already_defined
-
-    def __getitem__(self, name: str):
+        match self.data[name]:
+            case (
+                Symbol_Table.Func(is_global=is_global)
+                | Symbol_Table.Static(is_global=is_global)
+            ):
+                return is_global
+            case Symbol_Table.Local():
+                return False
         return self.data.get(name)
 
     def __contains__(self, name: str | parser.Identifier):
@@ -174,6 +191,21 @@ class Symbol_Table(BaseModel):
                 return root in self.data
             case _:
                 return name in self.data
+
+    type Symbol = Func | Static | Local
+
+    class Func(BaseModel):
+        defined: bool
+        is_global: bool
+        type: tuple[parser.CType, tuple[parser.CType, ...]]
+
+    class Static(BaseModel):
+        initial_value: t.Literal["tentative", "Nope!"] | int
+        type: parser.CType
+        is_global: bool
+
+    class Local(BaseModel):
+        type: parser.CType
 
 
 class Label_Map(BaseModel):
@@ -330,18 +362,30 @@ def resolve_program(prog: parser.Program):
             )
         return fixed
 
-    fixed = [fix_functions(func) for func in prog.functions]
+    fixed: list[parser.Declaration] = []
+    for decl in prog.declarations:
+        match decl:
+            case parser.Function_Declaration():
+                tweaked = fix_functions(decl)
+            case parser.Variable_Declaration():
+                tweaked = resolve_declaration(decl)
+        fixed.append(tweaked)
 
-    for func in fixed:
-        type_check_function(func)
+    # We have to type-check AFTER
+    for decl in fixed:
+        match decl:
+            case parser.Function_Declaration():
+                type_check_function(decl)
+            case parser.Variable_Declaration():
+                type_check_file_scope_variable_declaration(decl)
 
-    return parser.Program(functions=fixed)
+    return parser.Program(declarations=fixed)
 
 
 def resolve_function_declaration(func: parser.Function_Declaration):
     id_table = IDENTIFIER_TABLE.get()
     assert id_table.valid_function_declaration(func)
-    id_table.add_func(func)
+    id_table.add_external(func)
 
     # We denote a new scope, because `int a(int a);` is valid
     with Identifier_Table.new_scope():
@@ -362,10 +406,15 @@ def resolve_function_declaration(func: parser.Function_Declaration):
         name=func.name,
         param_list=param_list,
         body=body,
+        storage=func.storage,
     )
 
 
 def resolve_block(body: parser.Block) -> parser.Block:
+    """
+    Note: A new block does not necessarily mean a new scope.
+    Example-Error: `int _(int foo) { int foo; }` is an error!
+    """
     return parser.Block(body=[resolve_block_item(block) for block in body.body])
 
 
@@ -376,7 +425,11 @@ def resolve_block_item(block: parser.Block_Item):
         case parser.Statement():
             return resolve_statement(block)
         case parser.Function_Declaration():
-            return resolve_function_declaration(block)
+            func = resolve_function_declaration(block)
+            assert func.storage != "static", (
+                "Can't have static function declarations inside a block!"
+            )
+            return func
 
 
 def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
@@ -384,26 +437,50 @@ def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
         case None:
             return None
         case parser.Variable_Declaration():
-            return resolve_declaration(for_init)
+            decl = resolve_declaration(for_init)
+            assert decl.storage is None, "No external/static in for loops nerd!"
+            return decl
         case parser.Expression():
             return resolve_expression(for_init)
 
 
 def resolve_declaration(decl: parser.Variable_Declaration):
-    old_name = decl.name.root
     variable_map = IDENTIFIER_TABLE.get()
+    if variable_map.scope == 0:
+        # SPECIAL RULES!
+        # We don't validate at all (yet), we treat them as external and move on.
+        # These guys will later on be type-checked
+        # I think the rules are "relaxed" so that users could invoke `gcc` like so:
+        # `gcc folder_with_lots_of_c/**/*.c`
+        # Or because of historical `<#include>` shenanigans
+        variable_map.add_external(decl)
+        return decl
 
-    assert variable_map.valid_variable_declaration(old_name), "Invalid declaration!"
+    variable_map.assert_valid_variable_declaration(decl)
 
+    if decl.storage == "extern":
+        variable_map.add_external(decl)
+        # According to the book we do this in the type-checking phase
+        # if variable_map.scope != 0 and decl.init is not None:
+        #     raise ValueError(
+        #         "Declaration of block scope identifier with linkage cannot have an initializer"
+        #     )
+        return decl
+
+    old_name = decl.name.root
     new_name = variable_map.get_new_name(old_name)
     new_id = parser.Identifier(new_name)
 
     if decl.init is None:
-        return parser.Variable_Declaration(type=decl.type, name=new_id, init=None)
+        return parser.Variable_Declaration(
+            type=decl.type, name=new_id, init=None, storage=decl.storage
+        )
 
     new_exp = resolve_expression(decl.init)
 
-    return parser.Variable_Declaration(type=decl.type, name=new_id, init=new_exp)
+    return parser.Variable_Declaration(
+        type=decl.type, name=new_id, init=new_exp, storage=decl.storage
+    )
 
 
 def resolve_statement(stmt: parser.Statement) -> parser.Statement:
@@ -740,23 +817,33 @@ def type_check_function(func: parser.Function_Declaration):
     # So the only thing that matters is how many ints there are
     # func_type = len(func.param_list)
     has_body = func.body is not None
-    already_defined = False
     name = func.name.root
 
-    if name in symbol_table:
+    if name not in symbol_table:
+        already_defined = False
+        is_global = func.storage != "static"
+    else:
+        # Shoot. Let's go through the checklist
         old = symbol_table.data[name]
-        already_defined = old.already_defined
-        if isinstance(old.type, parser.CType):
+        if not isinstance(old, Symbol_Table.Func):
             raise ValueError("This mfer is a variable yo")
+        already_defined = old.defined
+
         if already_defined and has_body:
             raise ValueError("Tried to define a function twice!")
 
         if len(old.type[1]) != len(func.param_list):
             raise ValueError("Conflicting types bro!")
 
-    symbol_table.data[name] = Symbol_Table.Symbol(
+        if old.is_global and func.storage == "static":
+            raise ValueError("Static function declaration follows non-static")
+
+        is_global = old.is_global
+
+    symbol_table.data[name] = Symbol_Table.Func(
         type=(parser.CType("int"), tuple(param.type for param in func.param_list)),
-        already_defined=already_defined or has_body,
+        defined=already_defined or has_body,
+        is_global=is_global,
     )
 
     if not has_body:
@@ -765,7 +852,7 @@ def type_check_function(func: parser.Function_Declaration):
     body = func.body.body  # pyright: ignore[reportOptionalMemberAccess]
 
     for param in func.param_list:
-        type_check_variable_declaration(param)
+        type_check_local_variable_declaration(param)
     for item in body:
         type_check_block_item(item)
 
@@ -773,22 +860,115 @@ def type_check_function(func: parser.Function_Declaration):
 def type_check_block_item(item: parser.Block_Item):
     match item:
         case parser.Variable_Declaration():
-            type_check_variable_declaration(item)
+            type_check_local_variable_declaration(item)
         case parser.Function_Declaration():
             type_check_function(item)
         case parser.Statement():
             type_check_statement(item)
 
 
-def type_check_variable_declaration(decl: parser.Variable_Declaration):
+def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
     symbol_table = SYMBOL_TABLE.get()
-    symbol_table.data[decl.name.root] = Symbol_Table.Symbol(
-        type=parser.CType("int"),
-        already_defined=True,
-    )
 
-    if decl.init:
-        type_check_expression(decl.init)
+    match decl.storage:
+        case "extern":
+            if decl.init:
+                raise ValueError("Initializer on local extern variable declaration!")
+            if decl.name in symbol_table:
+                old = symbol_table.data[decl.name.root]
+                assert not isinstance(old, Symbol_Table.Func), (
+                    f"Redefinition of '{decl.name.root}' as different kind of symbol. "
+                    "Old one was a function, new one is an extern!"
+                )
+            else:
+                symbol_table.data[decl.name.root] = Symbol_Table.Static(
+                    initial_value="Nope!",
+                    type=parser.CType("int"),
+                    is_global=True,
+                )
+
+        case "static":
+            initial_value = decl.init.get_const_expression() if decl.init else 0
+            symbol_table.data[decl.name.root] = Symbol_Table.Static(
+                initial_value=initial_value,
+                type=parser.CType("int"),
+                is_global=False,
+            )
+        case None:
+            assert decl.name.root not in symbol_table, (
+                "Compiler bug! The identifier map messed up brother"
+            )
+            symbol_table.data[decl.name.root] = Symbol_Table.Local(
+                type=parser.CType("int")
+            )
+
+            if decl.init:
+                type_check_expression(decl.init)
+
+
+def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration):
+    initial_value: t.Literal["tentative", "Nope!"] | int
+    symbol_table = SYMBOL_TABLE.get()
+
+    match decl.init, decl.storage:
+        case None, "extern":
+            initial_value = "Nope!"
+        case None, _:
+            initial_value = "tentative"
+        case parser.Expression(), "extern":
+            raise ValueError("This should have been caught earlier no?")
+        case parser.Expression(), _:
+            initial_value = decl.init.get_const_expression()
+
+    is_global = decl.storage != "static"
+
+    if decl.name in symbol_table:
+        # Run through the checklist
+        old = symbol_table.data[decl.name.root]
+        assert not isinstance(old, Symbol_Table.Func), (
+            f"Redefinition of '{decl.name.root}' as different kind of symbol. "
+            "Old one was a function, new one is a variable!"
+        )
+
+        assert not isinstance(old, Symbol_Table.Local), (
+            f"Wait - how is '{decl.name.root}' already declared as a local???."
+        )
+
+        if decl.storage == "extern":
+            # C-STANDARD JANK ALERT
+            # Valid `static int a = 2; extern a`
+            # So is `int a = 2; extern a`
+            is_global = old.is_global
+            # in both cases, `a` won't be a global symbol
+        else:
+            assert old.is_global == is_global, (
+                f"Conflicting variable linkage! '{decl.name.root}' {is_global=} and yet {old.is_global=}."
+            )
+
+        # JANK ALERT
+        match old.initial_value, initial_value:
+            case int(), int():
+                raise ValueError(f"Conflict! Double declaration of '{decl.name.root}'")
+            case int(), _:
+                # perfectly valid...still jank
+                initial_value = old.initial_value
+            case "tentative", "Nope" | "tentative":
+                initial_value = "tentative"
+            case "Nope!", int() | "tentative" | "Nope!":
+                # Valid
+                # `extern int a;...int a = 3;`
+                # We can redeclare it or assign it or whatever. Really weird
+                pass
+            case "tentative", "Nope!" | int():
+                # Valid
+                # `int a;extern int a; int a = 3;`
+                pass
+
+    symbol_table.data[decl.name.root] = Symbol_Table.Static(
+        type=parser.CType("int"),
+        initial_value=initial_value,
+        is_global=is_global,
+    )
 
 
 def type_check_expression(exp: parser.Expression | parser.Factor):
@@ -858,7 +1038,7 @@ def type_check_statement(stmt: parser.Statement):
                 case None:
                     pass
                 case parser.Variable_Declaration():
-                    type_check_variable_declaration(init)
+                    type_check_local_variable_declaration(init)
                 case parser.Expression():
                     type_check_expression(init)
             if condition:

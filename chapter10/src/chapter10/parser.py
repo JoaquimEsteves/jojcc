@@ -123,7 +123,7 @@ class Specifiers:
                     # We're done here!
                     break
                 case _:
-                    raise ValueError(f"What is this {next_token=} doign here bro?")
+                    raise ValueError(f"What is this {next_token=} doing here bro?")
 
         # Technically - the types can be automatically inferred to be 'int'
         # But the book says to just enforce it
