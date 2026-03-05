@@ -46,7 +46,6 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
     """
     resp: list[str] = [
         f'.file\t"{filename.name}"',
-        ".text",
     ] + prog.to_assembly()
 
     return Ass("\n".join(resp) + "\n")
@@ -90,30 +89,34 @@ def map_relational_to_cond_code(code: parser.Relational_Binary) -> Cond_Code:
 
 class Program(BaseModel):
     functions: list[Function]
+    static_vars: list[tacky.Static_Variable]
 
     @staticmethod
     def from_tacky(prog: tacky.Program):
         return Program(
             functions=[
                 Function.from_tacky(function_def) for function_def in prog.function_defs
-            ]
+            ],
+            static_vars=prog.static_vars,
         )
 
     def to_assembly(self) -> list[str]:
-        return ["\n".join(f.to_assembly()) for f in self.functions] + [
-            '.section .note.GNU-stack,"",@progbits',
-        ]
+        res = ["\n".join(f.to_assembly()) for f in self.functions]
+        res.append("\n".join(static_var_to_assembly(var) for var in self.static_vars))
+        res.append('.section .note.GNU-stack,"",@progbits')
+        return res
 
     @t.override
     def __str__(self):
-        return "\n".join(map(str, self.functions))
+        return "\n".join(map(str, self.static_vars + self.functions))
 
 
-type Get_Val = "t.Callable[[tacky.Value | Pseudo | int], Imm | Stack | Reg]"
+type Get_Val = "t.Callable[[tacky.Value | Pseudo], Operand]"
 
 
 class Function(BaseModel):
     name: str
+    is_global: bool
     instructions: "list[Instruction]"
 
     @t.override
@@ -149,14 +152,19 @@ class Function(BaseModel):
             stack[name] = stack_pointer
             return stack_pointer
 
-        def get_val(value: tacky.Value | Pseudo | int):
+        def get_val(value: tacky.Value | Pseudo):
             match value:
                 case parser.Constant(root=val):
                     return Imm(root=val)
-                case tacky.Var(name=name) | Pseudo(root=name):
+                case tacky.Var(name=name):
+                    if value.is_static():
+                        return Data(root=name)
+
                     return Stack(root=get_stack(name))
-                case int():
-                    return Stack(root=value)
+                    # return Pseudo(root=name)
+                case Pseudo(root=name):
+                    return Stack(root=get_stack(name))
+                    # return value
 
         for index in reversed(range(len(func.params))):
             arg_source = _get_system_v_call_convention(index)
@@ -214,17 +222,30 @@ class Function(BaseModel):
                     instructions.append(Label(root=identifier))
                     pass
 
+        # TODO: A PASS HERE THAT CONVERTS FROM PSEUDO TO REGISTERS/STACK
+
         stack_allocation.root = stack_pointer - (stack_pointer % 16)
-        return Function(name=func.name, instructions=instructions)
+        return Function(
+            name=func.name, instructions=instructions, is_global=func.is_global
+        )
 
     def to_assembly(self) -> list[str]:
-        res = [
-            f".globl\t{self.name}",
-            f".type\t{self.name}, @function",
-            f"{self.name}:",
-            "\tpushq %rbp",
-            "\tmovq %rsp, %rbp",
-        ] + [f"\t{'\n\t'.join(i.to_assembly().split('\n'))}" for i in self.instructions]
+        # Weird - the book says to _always_ add a `.text` before every function definition
+        res = [".text"]
+        if self.is_global:
+            res.append(f".globl\t{self.name}")
+
+        res.extend(
+            (
+                f".type\t{self.name}, @function",
+                f"{self.name}:",
+                "\tpushq %rbp",
+                "\tmovq %rsp, %rbp",
+            )
+        )
+        res.extend(
+            f"\t{'\n\t'.join(i.to_assembly().split('\n'))}" for i in self.instructions
+        )
 
         return res
 
@@ -235,7 +256,7 @@ class Mov(BaseModel):
 
     @staticmethod
     def new(src: Operand, dest: Operand) -> list[Mov]:
-        if isinstance(src, Stack) and isinstance(dest, Stack):
+        if isinstance(src, (Stack, Data)) and isinstance(dest, (Stack, Data)):
             # It's illegal to mov from one mem-address into another
             # So we need to move to a strach register
             scratch = Reg.get_scratch()
@@ -272,9 +293,7 @@ class Unary(BaseModel):
                 return f"negl {self.operand.to_assembly()}"
 
     @staticmethod
-    def from_tacky(
-        arg: tacky.Unary, get_val: t.Callable[[tacky.Value], Imm | Stack]
-    ) -> tuple[Instruction, ...]:
+    def from_tacky(arg: tacky.Unary, get_val: Get_Val) -> tuple[Instruction, ...]:
         match arg:
             case tacky.Unary(
                 operation="NOT",
@@ -343,7 +362,7 @@ class Binary(BaseModel):
                     f"{pre.to_assembly('b')}\n"
                     f"{ass_op} {scratch.to_assembly()}, {dest.to_assembly()}\n"
                 )
-            case _, Stack(), Stack():
+            case _, Stack() | Data(), Stack() | Data():
                 scratch = Reg.get_scratch()
                 pre = Mov(src=self.src, dest=scratch)
                 return (
@@ -425,7 +444,7 @@ class Cmp(BaseModel):
         dest = self.rhs
 
         match self.lhs, self.rhs:
-            case (Stack(), Stack()):
+            case (Stack() | Data(), Stack() | Data()):
                 scratch = Reg.get_scratch()
                 intermediate = Mov(src=self.lhs, dest=scratch)
                 res.append(intermediate.to_assembly())
@@ -494,7 +513,7 @@ class Idiv(BaseModel):
                     f"{Mov(src=self.root, dest=scratch).to_assembly()}\n"
                     f"idivl {scratch.to_assembly()}"
                 )
-            case Reg() | Stack():
+            case _:
                 return f"idivl {self.root.to_assembly()}"
 
 
@@ -570,7 +589,7 @@ class Call(BaseModel):
                     instructions.append(Push(operand=Reg(root=root, size=64)))
                 case Imm():
                     instructions.append(Push(operand=val))
-                case Stack():
+                case Stack() | Data():
                     # If it's in memory we must first move it to `A` and then push that
                     # This...I don't understand - I suppose that it's for when we use memory in general
                     # instead of just "PUT EVERYTHING ON STACK"
@@ -578,6 +597,8 @@ class Call(BaseModel):
                     instructions.extend(
                         (Mov(src=val, dest=Reg(root="A")), Push(operand=accumulator))
                     )
+                case Pseudo():
+                    raise ValueError("Nope!")
         # Finally - having set all of the little arguments, we can call the function
         instructions.append(Call(name=call.name))
         # Now we must adjust the stack pointer
@@ -600,7 +621,9 @@ class Return(BaseModel):
         )
 
 
-type Operand = Imm | Reg | Stack
+type Operand = Imm | Reg | Stack | Data | Pseudo
+# Pseudo are replaced
+# type AnyOperand = Operand | Pseudo
 
 
 class Imm(BaseModel):
@@ -686,10 +709,28 @@ class Reg(BaseModel):
 
 
 class Pseudo(BaseModel):
+    """
+    I fucked up.
+
+    All the way back in chapter2 the author mentions that I should convert all
+    `tacky.Vars` into `pseudo-registers` and that later on there's another
+    compiler-pass that replaces all `Pseudo` registers
+    with either real-registers or some items on the stack.
+
+    I did NOT do this at all, I got clever and now I've been bitten in the ass.
+    """
+
     root: str
 
     def to_assembly(self) -> t.Never:
         raise NotImplementedError("This nerd should not be here yo!")
+
+
+class Data(BaseModel):
+    root: tacky.Valid_Identifier
+
+    def to_assembly(self):
+        return f"{self.root}(%rip)"
 
 
 class Stack(BaseModel):
@@ -701,6 +742,21 @@ class Stack(BaseModel):
 
 class Ass(RootModel[str]):
     pass
+
+
+def static_var_to_assembly(var: tacky.Static_Variable):
+    global_directive = f".globl {var.name}" if var.is_global else ""
+    section, actual_data = (
+        (".bss", ".zero 4") if var.init == 0 else (".data", f".long {var.init}")
+    )
+    text = f"""\
+	{global_directive} 
+	{section}
+	.align 4
+{var.name}:
+	{actual_data}"""
+
+    return dedent(text)
 
 
 def _get_8_bit(operand: Stack | Reg):

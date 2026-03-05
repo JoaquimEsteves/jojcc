@@ -85,6 +85,8 @@ def emit_tacky(
             return _match_statement(block, instructions)
         case parser.Variable_Declaration(name=name, init=init):
             var = Var(name=name.root)
+            if var.is_static():
+                return var
             if init:
                 result = emit_exp(init, instructions)
                 instructions.append(Copy(src=result, dest=var))
@@ -534,18 +536,62 @@ type Valid_Identifier = t.Annotated[dt.Identifier, BeforeValidator(pf.to_valid_c
 
 
 class Program(BaseModel):
-    function_defs: list["Function_Definition"]
+    function_defs: list[Function_Definition]
+    static_vars: list[Static_Variable]
 
     @staticmethod
     def from_ast(prog: parser.Program):
-        function_defs = [
-            Function_Definition.from_ast(function) for function in prog.functions
-        ]
-        return Program(function_defs=[f for f in function_defs if f is not None])
+        res = Program(function_defs=[], static_vars=[])
+        symbol_table = semantic_analysis.SYMBOL_TABLE.get()
+        for decl in prog.declarations:
+            match decl:
+                case parser.Function_Declaration():
+                    func = Function_Definition.from_ast(decl)
+                    if func:
+                        res.function_defs.append(func)
+                case parser.Variable_Declaration():
+                    # Handled later
+                    pass
+
+        for key, symbol in symbol_table.data.items():
+            decl = Static_Variable.from_symbol(key, symbol)
+            if decl:
+                res.static_vars.append(decl)
+        return res
 
     @t.override
     def __str__(self):
-        return "\n".join(map(str, self.function_defs))
+        return "\n".join(map(str, self.static_vars + self.function_defs))
+
+
+class Static_Variable(BaseModel):
+    name: Valid_Identifier
+    is_global: bool
+    init: int
+
+    @staticmethod
+    def from_symbol(name: str, symbol: semantic_analysis.Symbol_Table.Symbol):
+        if not isinstance(symbol, semantic_analysis.Symbol_Table.Static):
+            # Don't care
+            return None
+
+        res = Static_Variable(name=name, is_global=symbol.is_global, init=0)
+
+        match symbol.initial_value:
+            case "tentative":
+                return res
+            case int():
+                res.init = symbol.initial_value
+                return res
+            case "Nope!":
+                # The linker will yell at us later if it's not found
+                return
+
+    @t.override
+    def __str__(self):
+        return (
+            f"(let{'-global' if self.is_global else ''} (= `{self.name}` {self.init}))"
+        )
 
 
 class Function_Definition(BaseModel):
@@ -553,6 +599,7 @@ class Function_Definition(BaseModel):
     params: list[tuple[Var, parser.CType]]
     instructions: list[Instruction]
     return_type: parser.CType
+    is_global: bool
 
     @staticmethod
     def from_ast(ast: parser.Function_Declaration):
@@ -562,11 +609,15 @@ class Function_Definition(BaseModel):
         body: list[Instruction] = []
         for line in ast.body.body:
             _ = emit_tacky(line, body)
+        symbol_table = semantic_analysis.SYMBOL_TABLE.get()
+        symbol = symbol_table.data[ast.name.root]
+        assert isinstance(symbol, semantic_analysis.Symbol_Table.Func), "Compiler bug!"
         return Function_Definition(
             params=[(Var(name=var.name.root), var.type) for var in ast.param_list],
             name=ast.name.root,
             return_type=ast.return_type,
             instructions=body,
+            is_global=symbol.is_global,
         )
 
     @t.override
@@ -594,7 +645,7 @@ class Func_Call(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(= {self.dest} ({self.name} {' '.join(map(str, self.args) if self.args else '()')})"
+        return f"(= {self.dest} ({self.name} {' '.join(map(str, self.args) if self.args else '()')})"  # )
 
 
 type Instruction = (
@@ -621,6 +672,15 @@ class Return(BaseModel):
 
 class Var(BaseModel):
     name: str
+
+    def is_static(self):
+        symbol_table = semantic_analysis.SYMBOL_TABLE.get()
+        if self.name not in symbol_table:
+            # It's an auto-local
+            return False
+        return isinstance(
+            symbol_table.data[self.name], semantic_analysis.Symbol_Table.Static
+        )
 
     @t.override
     def __str__(self):
