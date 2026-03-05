@@ -21,6 +21,7 @@ dependencies = [
     "chapter7",
     "chapter8",
     "chapter9",
+    "chapter10",
 ]
 
 [project.optional-dependencies]
@@ -43,6 +44,7 @@ members = [
     "chapter7",
     "chapter8",
     "chapter9",
+    "chapter10",
 ]
 
 [tool.uv.sources]
@@ -56,6 +58,7 @@ chapter6 = { workspace = true }
 chapter7 = { workspace = true }
 chapter8 = { workspace = true }
 chapter9 = { workspace = true }
+chapter10 = { workspace = true }
 
 [tool.ruff]
 extend-exclude = [
