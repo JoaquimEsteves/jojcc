@@ -182,3 +182,4 @@ include chapter7/makefile
 include chapter8/makefile
 include chapter9/makefile
 include chapter10/makefile
+include chapter11/makefile
