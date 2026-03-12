@@ -267,7 +267,7 @@ def emit_exp(
         case parser.Unary():
             return _emit_unary(exp.root, instructions)
 
-        case parser.FancyAssignment():
+        case parser.Fancy_Assignment():
             raise ValueError("Should have been gone by this stage!")
 
         case parser.Conditional(left=left, middle=middle, right=right):
@@ -277,7 +277,7 @@ def emit_exp(
             assert cond_val, "NOPE"
             return cond_val
 
-        case parser.NormalAssigment(lhs=lhs, rhs=rhs):
+        case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
             match lhs:
                 case (
                     parser.Identifier(root=name)

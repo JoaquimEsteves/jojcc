@@ -25,18 +25,19 @@ class Identifier_Table(BaseModel):
         Example:
 
         ```c
-        int foo = 1;
+        int foo = 1; // scope = 0, renamed to `foo_0`
         {
-            int foo = 2; // valid!
+            int foo = 2; // scope 1, renamed to `foo_1`
         }
         int foo = 2; // NOT VALID!
-
         ```
 
         ```c
         int foo(int bar, int baz); // Valid (has linkage)
-        int foo(int wow, int valid); // Valid (who cares about warnings)
+        int foo(int wow, int valid); // Valid (We don't warn about the variables having a different name)
         ```
+
+        Note: Type-checking is done later, using the `symbol-table`
         """
 
         name: str
@@ -183,6 +184,17 @@ class Symbol_Table(BaseModel):
                 return False
         return self.data.get(name)
 
+    def assert_declaration_has_type_match(self, decl: parser.Variable_Declaration):
+        old = self.data.get(decl.name.root)
+        if old is None:
+            return
+        # If an old exists, it _must_ be a static-variable
+        # (If it was a local then variable-declaration would be an invalid double-declaration)
+        assert isinstance(old, Symbol_Table.Static)
+        assert old.type == decl.type.root, (
+            f"Types are different {old.type=} {decl.type.root=}"
+        )
+
     def __contains__(self, name: str | parser.Identifier):
         match name:
             case parser.Identifier(root=root):
@@ -198,9 +210,26 @@ class Symbol_Table(BaseModel):
         type: parser.CType.FuncType
 
     class Static(BaseModel):
-        initial_value: t.Literal["tentative", "Nope!"] | int
-        static_init: parser.TrivialType.SubType
-        type: parser.CType
+        class StaticInit(BaseModel):
+            type: parser.TrivialType.SubType
+            val: int
+
+            @staticmethod
+            def from_declaration(decl: parser.Variable_Declaration, *, mutate: bool):
+                assert isinstance(decl.type.root, parser.TrivialType)
+                type = decl.type.root.root
+                val = (
+                    decl.init.get_const_expression(cast_to=type, mutate=mutate)
+                    if decl.init
+                    else 0
+                )
+                return Symbol_Table.Static.StaticInit(
+                    type=type,
+                    val=val,
+                )
+
+        initial_value: t.Literal["tentative", "Nope!"] | StaticInit
+        type: parser.TrivialType
         is_global: bool
 
     class Local(BaseModel):
@@ -317,6 +346,12 @@ FOUND_CASES: ContextVar[dict[str, parser.SwitchCase]] = ContextVar(
 """
 cases can't be repeated inside a switch!
 """
+TYPE_OF_SWITCH: ContextVar[parser.TrivialType | None] = ContextVar(
+    "TYPE_OF_SWITCH", default=None
+)
+"""
+A `case` must be converted to the type of the switch.
+"""
 MOST_RECENT_CONTROL_LABEL: ContextVar[ContextVar[str] | None] = ContextVar(
     "MOST_RECENT ", default=None
 )
@@ -342,6 +377,13 @@ CURRENT_FUNCTION: ContextVar[parser.Function_Declaration | None] = ContextVar(
 
 
 def resolve_program(prog: parser.Program):
+    """
+    TODO(Joaquim): This function is IMPURE!
+
+    We _should_ enforce purity, the issue comes from the type-checkers needing to modify
+    the state.
+    """
+
     def fix_functions(original: parser.Function_Declaration):
         # Important that the `LABEL_MAP` gets redefined _before_ `resolve_function_declaration`
         # As it's _that_ function that changes the names of all of the labels
@@ -351,23 +393,23 @@ def resolve_program(prog: parser.Program):
             if not fixed.body:
                 return fixed
 
-        match fixed.body.body[-1]:
+        return_zero = parser.Statement(
+            root=parser.ReturnStatement(
+                exp=parser.Expression.from_constant(
+                    0,
+                    fixed.type.return_type.root,  # pyright: ignore[reportArgumentType]
+                )
+            )
+        )
+
+        match fixed.body.body and fixed.body.body[-1]:
             case parser.Statement(root=parser.ReturnStatement()):
                 pass
             case _:
                 # Ensures that there's always a return statement at the end
                 # C-standard says that only `main` cares about this.
                 # But the book says to do it for every function so whatever.
-                fixed.body.body.append(
-                    parser.Statement(
-                        root=parser.ReturnStatement(
-                            exp=parser.Expression.from_constant(
-                                0,
-                                fixed.type.return_type.root,  # pyright: ignore[reportArgumentType]
-                            )
-                        )
-                    )
-                )
+                fixed.body.body.append(return_zero)
         return fixed
 
     fixed: list[parser.Declaration] = []
@@ -587,11 +629,9 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             )
 
         case parser.Switch(checker=checker, body=body):
-            found_cases: dict[str, parser.SwitchCase] = {}
             switch_label = _get_new_name("switch_label")
             with (
                 pf.set_context(SWITCH_CONTROL_LABEL, switch_label),
-                pf.set_context(FOUND_CASES, found_cases),
                 pf.set_context(MOST_RECENT_CONTROL_LABEL, SWITCH_CONTROL_LABEL),
             ):
                 checker = resolve_expression(checker)
@@ -600,18 +640,19 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 root=parser.Switch(
                     checker=checker,
                     body=body,
-                    associated_cases=list(found_cases.values()),
+                    # Note: We populate this field ONLY on the `type-checking` phase
+                    # It's just easiest that way
+                    associated_cases=[],
                     control_label=switch_label,
                 )
             )
         case parser.SwitchCase(type=type, body=body):
             if not (control_label := _get_control_label("switch")):
                 raise ValueError("No control label found!")
+            # Note: That we check that all of the cases are correct in the type-check phase
+            # We have to coerce the switch-cases into a `const-expression` anyway,
+            # this const-expression coersion is best done on the type-checker
             body = resolve_statement(body)
-            # We have to make sure that these cases were not used already in the same context
-            found_cases = FOUND_CASES.get()
-            as_str = type.model_dump_json()
-            assert as_str not in found_cases, "This case was already found!"
             match type:
                 case parser.SwitchCase.Case(check=check):
                     assert check.is_const_expression(), "Not a constant expression bro!"
@@ -624,21 +665,57 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 control_label=control_label,
                 label=parser.Identifier(_get_new_name("case")),
             )
-            found_cases[as_str] = resolved
             return parser.Statement(root=resolved)
 
 
-def resolve_assignable(
+def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
+    match lvalue:
+        case parser.Identifier():
+            return resolve_identifier(lvalue, IDENTIFIER_TABLE.get())
+        case parser.Expression():
+            # shit...
+            match lvalue.root:
+                case parser.Factor(root=parser.Identifier()):
+                    assert isinstance(lvalue.root.root, parser.Identifier)
+                    identifier: parser.Identifier = lvalue.root.root
+                    return parser.Expression(
+                        root=parser.Factor(
+                            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get())
+                        )
+                    )
+                case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
+                    return parser.Expression(
+                        root=parser.Normal_Assignment(
+                            # The LHS _must_ be an identifier or something
+                            # that resolves to an identifier
+                            lhs=resolve_valid_lvalue(lhs),
+                            rhs=resolve_expression(rhs),
+                        )
+                    )
+                case _:
+                    raise ValueError(
+                        f"This {lvalue} does not look like an lvalue to me!"
+                    )
+
+
+def resolve_post_and_prefix_assignable(
     identifier: parser.Identifier | parser.Expression | parser.Factor,
 ):
+    """
+    Everyone knows what an lvalue is right?
+    But C also has this `not assignable`...idea
+
+    I still DON'T know what is something that is not assignable
+    I just know, that `++a++` is NOT assignable
+    """
     if isinstance(identifier, (parser.Expression, parser.Factor)):
         current = identifier
         # Solves situations like so:
-        # `((((((2))))))`
+        # ((((((2))))))  # noqa: ERA001
         #
         # Note: This SHOULD have been taken care of before we hit this spot
         # But just in case...
-        while hasattr(current, "type") and not isinstance(current.root, str):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
+        while hasattr(current, "root") and not isinstance(current.root, str):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
             current = current.root  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
         if isinstance(current, parser.Unary):
             # Postfix and pre-fix operators being a PITA as usual
@@ -648,7 +725,7 @@ def resolve_assignable(
                 root=parser.Factor(
                     root=parser.Unary(
                         op=current.op,
-                        exp=resolve_assignable(current.exp).root,  # pyright: ignore[reportArgumentType, reportUnknownArgumentType, reportUnknownMemberType]
+                        exp=resolve_post_and_prefix_assignable(current.exp).root,  # pyright: ignore[reportArgumentType, reportUnknownArgumentType, reportUnknownMemberType]
                         pre=current.pre,
                     )
                 )
@@ -692,6 +769,11 @@ def resolve_identifier(
 def resolve_factor(factor: parser.Factor) -> parser.Factor:
     match factor.root:
         case parser.Cast(target_type=target_type, exp=exp):
+            # It feels really weird that we're checking here
+            # I think I messed up my operator precedence somewhere
+            assert not isinstance(
+                exp.root, (parser.Normal_Assignment, parser.Fancy_Assignment)
+            ), "LValue bullshit"
             return parser.Factor(
                 root=parser.Cast(target_type=target_type, exp=resolve_expression(exp))
             )
@@ -700,17 +782,18 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
         case parser.Expression():
             return parser.Factor(root=resolve_expression(factor.root))
         case parser.Identifier():
-            return parser.Factor(root=resolve_assignable(factor.root))
+            return parser.Factor(
+                root=resolve_identifier(factor.root, IDENTIFIER_TABLE.get())
+            )
         case parser.Unary(op=op, exp=exp, pre=pre):
             if op not in ("++", "--"):
                 return parser.Factor(
                     root=parser.Unary(op=op, exp=resolve_factor(exp), pre=pre)
                 )
-            # assert the boy is an lvalue
             return parser.Factor(
                 root=parser.Unary(
                     op=op,
-                    exp=resolve_assignable(exp).root,  # pyright: ignore[reportArgumentType]
+                    exp=resolve_post_and_prefix_assignable(exp).root,  # pyright: ignore[reportArgumentType]
                     pre=pre,
                 )
             )
@@ -736,53 +819,16 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
                     right=resolve_expression(right),
                 )
             )
-        case parser.NormalAssigment(lhs=lhs, rhs=rhs):
+        case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
             return parser.Expression(
-                root=parser.NormalAssigment(
-                    lhs=resolve_assignable(lhs),
+                root=parser.Normal_Assignment(
+                    lhs=resolve_valid_lvalue(lhs),
                     rhs=resolve_expression(rhs),
                 )
             )
-        case parser.FancyAssignment(lhs=lhs, rhs=rhs, type=type):
-            # Pyright needed some help here
-            rhs: parser.Expression
-
-            def get_bin_op(type: parser.Binary_Op_Without_Assignment):
-                return parser.Expression(
-                    root=parser.BinaryOp(
-                        op=type,
-                        lhs=parser.Expression(root=parser.Factor(root=lhs)),
-                        rhs=rhs,
-                    )
-                )
-
-            match type:
-                case "+=":
-                    rhs = get_bin_op("PLUS")
-                case "-=":
-                    rhs = get_bin_op("MINUS")
-                case "*=":
-                    rhs = get_bin_op("ASTERISK")
-                case "%=":
-                    rhs = get_bin_op("PERCENT")
-                case "&=":
-                    rhs = get_bin_op("AMPERSAND")
-                case "|=":
-                    rhs = get_bin_op("PIPE")
-                case "^=":
-                    rhs = get_bin_op("CARRET")
-                case "<<=":
-                    rhs = get_bin_op("LEFT_SHIFT")
-                case ">>=":
-                    rhs = get_bin_op("RIGHT_SHIFT")
-                case "/=":
-                    rhs = get_bin_op("FORWARD_SLASH")
-
-            return parser.Expression(
-                root=parser.NormalAssigment(
-                    lhs=resolve_assignable(lhs),
-                    rhs=resolve_expression(rhs),
-                )
+        case parser.Fancy_Assignment():
+            return resolve_expression(
+                parser.Expression(root=exp.root.to_normal_assignment())
             )
 
         case parser.Factor():
@@ -851,7 +897,6 @@ def type_check_function(func: parser.Function_Declaration):
         if already_defined and has_body:
             raise ValueError("Tried to define a function twice!")
 
-        # TODO: SHIT
         if old.type.return_type != func.type.return_type:
             raise ValueError("Conflicting types bro!")
         if old.type.params != func.type.params:
@@ -903,40 +948,39 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
         case "extern":
             if decl.init:
                 raise ValueError("Initializer on local extern variable declaration!")
-            if decl.name in symbol_table:
-                old = symbol_table.data[decl.name.root]
-                assert not isinstance(old, Symbol_Table.Func), (
-                    f"Redefinition of '{decl.name.root}' as different kind of symbol. "
-                    "Old one was a function, new one is an extern!"
-                )
-            else:
+            symbol_table.assert_declaration_has_type_match(decl)
+            if decl.name not in symbol_table:
                 symbol_table.data[decl.name.root] = Symbol_Table.Static(
                     initial_value="Nope!",
-                    type=parser.CType.from_trivial("int"),
+                    type=decl.type.root,  # pyright: ignore[reportArgumentType]
                     is_global=True,
                 )
 
         case "static":
-            initial_value = decl.init.get_const_expression() if decl.init else 0
+            initial_value = Symbol_Table.Static.StaticInit.from_declaration(
+                decl, mutate=False
+            )
+
+            symbol_table.assert_declaration_has_type_match(decl)
+
             symbol_table.data[decl.name.root] = Symbol_Table.Static(
                 initial_value=initial_value,
-                type=parser.CType.from_trivial("int"),
+                type=decl.type.root,  # pyright: ignore[reportArgumentType]
                 is_global=False,
             )
+
         case None:
             assert decl.name.root not in symbol_table, (
                 "Compiler bug! The identifier map messed up brother"
             )
-            symbol_table.data[decl.name.root] = Symbol_Table.Local(
-                type=parser.CType.from_trivial("int")
-            )
+            symbol_table.data[decl.name.root] = Symbol_Table.Local(type=decl.type)
 
             if decl.init:
                 type_check_expression(decl.init)
 
 
 def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration):
-    initial_value: t.Literal["tentative", "Nope!"] | int
+    initial_value: t.Literal["tentative", "Nope!"] | Symbol_Table.Static.StaticInit
     symbol_table = SYMBOL_TABLE.get()
 
     match decl.init, decl.storage:
@@ -947,7 +991,9 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
         case parser.Expression(), "extern":
             raise ValueError("This should have been caught earlier no?")
         case parser.Expression(), _:
-            initial_value = decl.init.get_const_expression()
+            initial_value = Symbol_Table.Static.StaticInit.from_declaration(
+                decl, mutate=True
+            )
 
     is_global = decl.storage != "static"
 
@@ -963,6 +1009,8 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
             f"Wait - how is '{decl.name.root}' already declared as a local???."
         )
 
+        symbol_table.assert_declaration_has_type_match(decl)
+
         if decl.storage == "extern":
             # C-STANDARD JANK ALERT
             # Valid `static int a = 2; extern a`
@@ -976,25 +1024,25 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
 
         # JANK ALERT
         match old.initial_value, initial_value:
-            case int(), int():
+            case Symbol_Table.Static.StaticInit(), Symbol_Table.Static.StaticInit():
                 raise ValueError(f"Conflict! Double declaration of '{decl.name.root}'")
-            case int(), _:
+            case Symbol_Table.Static.StaticInit(), _:
                 # perfectly valid...still jank
                 initial_value = old.initial_value
             case "tentative", "Nope" | "tentative":
                 initial_value = "tentative"
-            case "Nope!", int() | "tentative" | "Nope!":
+            case "Nope!", Symbol_Table.Static.StaticInit() | "tentative" | "Nope!":
                 # Valid
                 # `extern int a;...int a = 3;`
                 # We can redeclare it or assign it or whatever. Really weird
                 pass
-            case "tentative", "Nope!" | int():
+            case "tentative", "Nope!" | Symbol_Table.Static.StaticInit():
                 # Valid
                 # `int a;extern int a; int a = 3;`
                 pass
 
     symbol_table.data[decl.name.root] = Symbol_Table.Static(
-        type=parser.CType("int"),
+        type=decl.type.root,  # pyright: ignore[reportArgumentType]
         initial_value=initial_value,
         is_global=is_global,
     )
@@ -1002,20 +1050,21 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
 
 def type_check_expression(exp: parser.Expression | parser.Factor):
     symbol_table = SYMBOL_TABLE.get()
+
     match exp.root:
         case parser.Identifier(root=name):
-            exp_type = type_check_identifier(exp.root)
-            exp.type = exp_type
+            exp_type = type_check_identifier_is_not_function(exp.root)
+            exp.type = parser.CType(root=exp_type)
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, parser.CType.FuncType):
                 raise TypeError()
             new_args: list[parser.Expression] = []
-            for index, param in enumerate(old.type.params):
-                current_arg = args[index]
+            assert len(old.type.params) == len(args), "Wrong number of arguments bro!"
+            for param, current_arg in zip(old.type.params, args, strict=True):
                 type_check_expression(current_arg)
-                if param != args[index].type:
-                    current_arg = _convert_to(current_arg, args[index].type)
+                if param != current_arg.type:
+                    current_arg = _convert_to(current_arg, current_arg.type)
                 new_args.append(current_arg)
             exp.type = old.type.return_type
             exp.root.args = new_args
@@ -1023,8 +1072,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
         case parser.Factor() | parser.Expression():
             # Recursion...
             type_check_expression(exp.root)
-        # Because they're all ints, for now we ain't gotta check shit
-
+            exp.type = exp.root.type
         case parser.BinaryOp(lhs=lhs, rhs=rhs, op=op):
             type_check_expression(lhs)
             type_check_expression(rhs)
@@ -1072,15 +1120,17 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             assert middle.type and right.type, "Dude - where my types at?"
             exp.type = _get_common_type(middle.type, right.type)
         case (
-            parser.FancyAssignment(lhs=lhs, rhs=rhs)
-            | parser.NormalAssigment(lhs=lhs, rhs=rhs)
+            parser.Fancy_Assignment(lhs=lhs, rhs=rhs)
+            | parser.Normal_Assignment(lhs=lhs, rhs=rhs)
         ):
             match lhs:
                 case parser.Expression():
                     type_check_expression(lhs)
                     typed_left = lhs.type
                 case parser.Identifier():
-                    old_type = type_check_identifier(lhs)
+                    old_type = parser.CType(
+                        root=type_check_identifier_is_not_function(lhs)
+                    )
                     typed_left = old_type
             type_check_expression(rhs)
             new_rhs = _convert_to(rhs, typed_left)
@@ -1090,17 +1140,30 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             exp.type = typed_left
         case parser.Constant(ctype=trivial_type):
             exp.type = parser.CType(root=trivial_type)
-        case parser.Cast(target_type=target_type, exp=exp):
-            type_check_expression(exp)
+        case parser.Cast(target_type=target_type, exp=inner):
+            type_check_expression(inner)
             exp.type = target_type
 
+    if exp.type is None:
+        raise ValueError("exp should have a type at this stage!")
 
-def type_check_identifier(ident: parser.Identifier):
+
+def type_check_identifier_is_not_function(
+    ident: parser.Identifier,
+) -> parser.TrivialType:
+    """
+    Ensures we're not invoking a function as a value
+    (Shit _will_ get messy when we allow function pointers lol)
+    """
     name = ident.root
     old = SYMBOL_TABLE.get().data[name]
-    if not isinstance(old.type, parser.CType):
-        raise TypeError()
-    return old.type
+    match old.type:
+        case parser.TrivialType():
+            return old.type
+        case parser.CType(root=parser.TrivialType()):
+            return old.type.root  # pyright: ignore[reportReturnType]
+        case _:
+            raise TypeError()
 
 
 def type_check_statement(stmt: parser.Statement):
@@ -1146,17 +1209,39 @@ def type_check_statement(stmt: parser.Statement):
                 type_check_block_item(b)
         case parser.Switch(checker=checker, body=body):
             type_check_expression(checker)
-            type_check_statement(body)
+            assert checker.type and isinstance(checker.type.root, parser.TrivialType)
+
+            found_cases: dict[str, parser.SwitchCase] = {}
+            with (
+                pf.set_context(TYPE_OF_SWITCH, checker.type.root),
+                pf.set_context(FOUND_CASES, found_cases),
+            ):
+                type_check_statement(body)
+            # Finally - we can now add the cases!
+            stmt.root.associated_cases = list(found_cases.values())
         case parser.SwitchCase(type=type, body=body):
+            cast_to = TYPE_OF_SWITCH.get()
+            assert cast_to, "could not determine type of cast!"
+            found_cases = FOUND_CASES.get()
+
             type_check_statement(body)
+
             match type:
                 case parser.SwitchCase.Default():
-                    pass
-                case parser.SwitchCase.Case(check=check):
-                    type_check_expression(check)
-        case (
-            "nope" | parser.Break() | parser.Continue() | parser.Goto() | parser.Label()
-        ):
+                    as_str = "default"
+                case parser.SwitchCase.Case():
+                    as_str = str(
+                        type.check.get_const_expression(
+                            cast_to=cast_to.root, mutate=True
+                        )
+                    )
+
+            assert as_str not in found_cases, "This case was already found!"
+            found_cases[as_str] = stmt.root
+
+        case parser.Label(statement=statement):
+            type_check_statement(statement)
+        case "nope" | parser.Break() | parser.Continue() | parser.Goto():
             pass
 
 

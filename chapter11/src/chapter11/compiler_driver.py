@@ -228,14 +228,14 @@ def main():
         if parse:
             print(parsed)
             continue
-        validated = semantic_analysis.resolve_program(parsed)
         if validate_f:
             print("Before")
             print(parsed)
             print("After")
+            validated = semantic_analysis.resolve_program(parsed)
             print(validated)
             continue
-        parsed = validated
+        parsed = semantic_analysis.resolve_program(parsed)
 
         tackified = tacky.Program.from_ast(parsed)
         if tacky_f:

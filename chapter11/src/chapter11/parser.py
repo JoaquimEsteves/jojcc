@@ -770,7 +770,9 @@ class Expression(Typed):
     <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
     """
 
-    type SubType = BinaryOp | Factor | FancyAssignment | NormalAssigment | Conditional
+    type SubType = (
+        BinaryOp | Factor | Fancy_Assignment | Normal_Assignment | Conditional
+    )
     root: SubType
 
     @model_validator(mode="after")
@@ -795,20 +797,47 @@ class Expression(Typed):
         But the *BOOK* wants me to do that only at semantic-analysis time.
         """
         with suppress(ValueError):
-            _ = self.get_const_expression()
+            _ = self.get_const_expression(cast_to=None)
             return True
         return False
 
-    def get_const_expression(self):
-        match self.root:
-            case Factor(root=Constant(root=root)):
-                return root
-            # TODO: Stuff like `int a = 1;`
-            # is valid if `a` is `const` or the compiler can tell
-            # that no one else touched it
-            # For now - imma just not care
-            case _:
-                raise ValueError("Not a const expression bro!")
+    def get_const_expression(
+        self, *, cast_to: TrivialType.SubType | None, mutate: bool = False
+    ):
+        """
+        I don't like this little `mutate` thing...but the printer was outputting wrong values
+        It would be correct on the symbol-table, but not on the Variable_Declaration itself
+        """
+
+        def get_val() -> Constant:
+            match self.root:
+                case Factor(root=Constant()):
+                    # I don't understand why this guy is bugging out here
+                    res: Constant = self.root.root  # pyright: ignore[reportAssignmentType]
+
+                    # 1. We shouldn't mutate
+                    # 2. This should be done bellow in cast_val
+                    # But cast-val is being a dick
+                    if mutate and cast_to:
+                        self.type = CType.from_trivial(cast_to)
+                        self.root.type = CType.from_trivial(cast_to)
+                        res.ctype = TrivialType(root=cast_to)
+
+                    return res
+                # In the future this step will be more involved
+                case _:
+                    raise ValueError("Not a const expression bro!")
+
+        def cast_val(val: Constant):
+            if cast_to is None:
+                # Nothing todo, handled elsewhere
+                return val.root
+            new_val = Constant.fit(val.root, cast_to)
+            if mutate:
+                val.root = new_val
+            return new_val
+
+        return cast_val(get_val())
 
     @staticmethod
     def from_constant(const: int, ctype: TrivialType):
@@ -877,9 +906,9 @@ class Expression(Typed):
 
                     identifier = Expression(root=left)
                     left = (
-                        FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
+                        Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
                         if operator != "="
-                        else NormalAssigment(lhs=identifier, rhs=rhs)
+                        else Normal_Assignment(lhs=identifier, rhs=rhs)
                     )
                 elif operator == "?":
                     middle, rhs = inner(rest, 0)
@@ -935,6 +964,26 @@ class Constant(BaseModel):
             return Constant(root=v, ctype=TrivialType(root="long"))
 
         return Constant(root=v, ctype=TrivialType(root="int"))
+
+    @staticmethod
+    def fit(val: int, target: TrivialType.SubType):
+        """
+        Given some infinite int - make it fit an int/long/etc
+        """
+        if val > 2**63 - 1:
+            raise ValueError("{v=} can not be represented as int or long!")
+
+        match target:
+            case "long":
+                return val
+            case "int" if val > 2**31 - 1:
+                # We follow the rules as defined in GCC
+                # This effectively `cuts` the first 4 bytes
+                while val > 2**31 - 1:
+                    val = val - 2**32  # pyright: ignore[reportAny]
+                return val
+            case "int":
+                return val
 
 
 class Factor(Typed):
@@ -1179,7 +1228,7 @@ class BinaryOp(BaseModel):
         return f"({self.op} {self.lhs.root!s} {self.rhs.root!s})"
 
 
-class NormalAssigment(BaseModel):
+class Normal_Assignment(BaseModel):
     lhs: LValue
     rhs: Expression
 
@@ -1214,7 +1263,7 @@ Note: Making this _not_ a type is important or pydantic cries about a circular  
 """
 
 
-class FancyAssignment(BaseModel):
+class Fancy_Assignment(BaseModel):
     type: lexer.Fancy_Assignment_Ops
     lhs: LValue
     rhs: Expression
@@ -1222,6 +1271,55 @@ class FancyAssignment(BaseModel):
     @t.override
     def __str__(self):
         return f"({self.type} {self.lhs!s} {self.rhs.root!s})"
+
+    def to_normal_assignment(self) -> Normal_Assignment:
+        """
+        Converts a fancy assignment into a normal one
+
+        Note: `a %= 1` is the same as `a = a % 1`
+
+        In ALMOST everyway. The only problem is that this nerd is not a valid lvalue
+        """
+        # pyright needed some help here
+        rhs: Expression = self.rhs
+        lhs = self.lhs
+        type = self.type
+
+        def get_bin_op(type: Binary_Op_Without_Assignment):
+            return Expression(
+                root=BinaryOp(
+                    op=type,
+                    lhs=Expression(root=Factor(root=lhs)),
+                    rhs=rhs,
+                )
+            )
+
+        match type:
+            case "+=":
+                rhs = get_bin_op("PLUS")
+            case "-=":
+                rhs = get_bin_op("MINUS")
+            case "*=":
+                rhs = get_bin_op("ASTERISK")
+            case "%=":
+                rhs = get_bin_op("PERCENT")
+            case "&=":
+                rhs = get_bin_op("AMPERSAND")
+            case "|=":
+                rhs = get_bin_op("PIPE")
+            case "^=":
+                rhs = get_bin_op("CARRET")
+            case "<<=":
+                rhs = get_bin_op("LEFT_SHIFT")
+            case ">>=":
+                rhs = get_bin_op("RIGHT_SHIFT")
+            case "/=":
+                rhs = get_bin_op("FORWARD_SLASH")
+
+        return Normal_Assignment(
+            lhs=lhs,
+            rhs=rhs,
+        )
 
 
 class Identifier(RootModel[str]):
