@@ -29,7 +29,7 @@ Notes:
 
 > While parsing <block-item>, you need a way to tell whether the current block
 > item is a statement or a declaration. To do this, peek at the first token; if
-> it’s the int keyword, it’s a declaration, and otherwise it’s a statement.
+> it's the int keyword, it's a declaration, and otherwise it's a statement.
 
 """
 
@@ -152,7 +152,7 @@ class Declaration(BaseModel):
 
     @t.override
     def __str__(self):
-        pre = f"(let {str(self.name)}:{self.type.root}"
+        pre = f"(let {self.name!s}:{self.type.root}"
         if not self.init:
             return pre + ")"
         return f"{pre} '{self.init or 'void'})"
@@ -219,17 +219,17 @@ class ReturnStatement(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(return {str(self.exp)})"
+        return f"(return {self.exp!s})"
 
 
 class IfStatement(BaseModel):
     condition: Expression
     then: Statement
-    else_s: "Statement | None" = None
+    else_s: Statement | None = None
 
     @t.override
     def __str__(self):
-        res = f"(if {str(self.condition)}\n"
+        res = f"(if {self.condition!s}\n"
         body = [str(self.then)]
         if self.else_s:
             body.append(str(self.else_s))
@@ -326,7 +326,7 @@ class Goto(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(goto {str(self.label)})"
+        return f"(goto {self.label!s})"
 
 
 class Label(BaseModel):
@@ -335,7 +335,7 @@ class Label(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(label {str(self.label)}\n{pf.indent(str(self.statement))})"
+        return f"(label {self.label!s}\n{pf.indent(str(self.statement))})"
 
 
 class Expression(BaseModel):
@@ -373,6 +373,7 @@ class Expression(BaseModel):
     @staticmethod
     def from_tokens(
         tokens: lexer.Lexed,
+        *,
         assert_no_food_left: t.Literal[False] = False,
         min_prec: int = 0,
     ) -> tuple[Expression, lexer.Lexed]: ...
@@ -380,7 +381,7 @@ class Expression(BaseModel):
     @t.overload
     @staticmethod
     def from_tokens(
-        tokens: lexer.Lexed, assert_no_food_left: t.Literal[True], min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: t.Literal[True], min_prec: int = 0
     ) -> Expression:
         """
         If we specify `assert_no_food_left` then we assert that the tokens we _would_ return are empty.
@@ -388,7 +389,7 @@ class Expression(BaseModel):
 
     @staticmethod
     def from_tokens(
-        tokens: lexer.Lexed, assert_no_food_left: bool = False, min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: bool = False, min_prec: int = 0
     ) -> tuple[Expression, lexer.Lexed] | Expression:
         def inner(
             tokens: lexer.Lexed, min_prec: int = 0
@@ -397,10 +398,8 @@ class Expression(BaseModel):
             while right:
                 (operator, _identifier, _), *rest = right
 
-                if operator not in BINARY_OP_PRECEDENCE.keys():
+                if operator not in BINARY_OP_PRECEDENCE:
                     break
-
-                operator = t.cast(Binary_Op_Or_If_Expr, operator)
 
                 if BINARY_OP_PRECEDENCE[operator] < min_prec:
                     # Let the other nerds handle this!
@@ -473,7 +472,7 @@ class Factor(BaseModel):
             case Constant(root=root):
                 return str(root)
             case Unary(type=type, exp=exp, pre=pre):
-                return f"({str(type)} {str(exp)} {'' if pre else 'postfix'})"
+                return f"({type!s} {exp!s} {'' if pre else 'postfix'})"
             case Expression() | Identifier():
                 return str(self.type)
 
@@ -514,7 +513,7 @@ class Factor(BaseModel):
                 if next_token in ("++", "--"):
                     # special case! I hate these nerds
                     factor, food_left = Factor.parse(
-                        rest[:corresponding_closed] + [rest[corresponding_closed + 1]]
+                        [*rest[:corresponding_closed], rest[corresponding_closed + 1]]
                     )
                     assert food_left == [], "We left food on the table!"
                     return Factor(type=Expression(type=factor)), rest[
@@ -651,7 +650,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.type} {str(self.lhs.type)} {str(self.rhs.type)})"
+        return f"({self.type} {self.lhs.type!s} {self.rhs.type!s})"
 
 
 class NormalAssigment(BaseModel):
@@ -660,7 +659,7 @@ class NormalAssigment(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(= {str(self.lhs)} {str(self.rhs.type)})"
+        return f"(= {self.lhs!s} {self.rhs.type!s})"
 
 
 class Conditional(BaseModel):
@@ -670,7 +669,7 @@ class Conditional(BaseModel):
 
     @t.override
     def __str__(self):
-        res = f"(if-expr {str(self.left)}\n"
+        res = f"(if-expr {self.left!s}\n"
         body = pf.indent("\n".join(map(str, [self.middle, self.right])))
         return f"{res}{body})"
 
@@ -696,7 +695,7 @@ class FancyAssignment(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.type} {str(self.lhs)} {str(self.rhs.type)})"
+        return f"({self.type} {self.lhs!s} {self.rhs.type!s})"
 
 
 class Identifier(RootModel[str]):

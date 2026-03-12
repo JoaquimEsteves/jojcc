@@ -381,7 +381,7 @@ def _make_label(label: str):
 
 
 class Program(BaseModel):
-    function_def: "Function"
+    function_def: Function
 
     @staticmethod
     def from_ast(prog: parser.Program):
@@ -395,7 +395,7 @@ class Program(BaseModel):
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
     return_type: parser.CType
 
     @staticmethod
@@ -437,7 +437,7 @@ class Return(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(return {str(self.root)})"
+        return f"(return {self.root!s})"
 
 
 class Var(BaseModel):
@@ -459,7 +459,7 @@ class Unary(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.source)} {str(self.destination)})"
+        return f"({self.operation} {self.source!s} {self.destination!s})"
 
 
 class BinaryOp(BaseModel):
@@ -470,7 +470,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.src1)} {str(self.src2)})\n({self.operation} {str(self.src2)} {str(self.dest)})"
+        return f"({self.operation} {self.src1!s} {self.src2!s})\n({self.operation} {self.src2!s} {self.dest!s})"
 
 
 class Copy(BaseModel):
@@ -479,7 +479,7 @@ class Copy(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(copy {str(self.src)} {str(self.dest)})"
+        return f"(copy {self.src!s} {self.dest!s})"
 
 
 class Jump(BaseModel):

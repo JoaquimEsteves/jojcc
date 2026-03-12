@@ -108,20 +108,20 @@ class x64:
     q -> Quad, 4 bytes
     """
 
-    from_bit_size: dict[Bit_Size, Operation_Size] = {
+    from_bit_size: t.Final[dict[Bit_Size, Operation_Size]] = {
         64: "q",
         32: "l",
         16: "w",
         8: "b",
     }
-    from_op_size: dict[Operation_Size, Bit_Size] = {
+    from_op_size: t.Final[dict[Operation_Size, Bit_Size]] = {
         "q": 64,
         "l": 32,
         "w": 16,
         "b": 8,
     }
 
-    from_arg_number: dict[int, Register] = {
+    from_arg_number: t.Final[dict[int, Register]] = {
         0: "DI",
         1: "SI",
         2: "D",

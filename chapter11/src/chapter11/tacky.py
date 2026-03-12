@@ -108,7 +108,7 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
             if isinstance(checker_res, Var):
                 checker_expr = parser.Expression.read_var(checker_res.name)
             else:
-                checker_expr = parser.Expression(type=parser.Factor(type=checker_res))
+                checker_expr = parser.Expression(root=parser.Factor(root=checker_res))
 
             end_of_switch_label = Label.from_break(control_label)
             # By default we jump to where a `break` would jump to if none of our
@@ -125,8 +125,8 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 goto = parser.Statement(root=parser.Goto(label=case.label))
                 _ = do_an_if(
                     parser.Expression(
-                        type=parser.BinaryOp(
-                            type="==", lhs=checker_expr, rhs=case.type.check
+                        root=parser.BinaryOp(
+                            op="==", lhs=checker_expr, rhs=case.type.check
                         )
                     ),
                     goto,
@@ -200,10 +200,10 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
             # expression is “replaced by a nonzero constant” (section 6.8.5.3,
             # paragraph 2)
             # But the book also says that we can ignore that shit
-            # else:
-            #   instructions.append(
-            #      JumpIfZero(condition=parser.Constant(1), target=break_label)
-            #   )
+            # // else:
+            # //   instructions.append(
+            # //      JumpIfZero(condition=parser.Constant(1), target=break_label)
+            # //   )
             _ = emit_tacky(body, instructions)
             instructions.append(continue_label)
             if post:
@@ -254,18 +254,18 @@ def emit_exp(
     exp: parser.Expression | parser.Factor,
     instructions: list[Instruction],
 ) -> Value:
-    match exp.type:
+    match exp.root:
         case parser.Func_Call():
-            return emit_func_call(exp.type, instructions)
+            return emit_func_call(exp.root, instructions)
         case parser.Factor() | parser.Expression():
-            return emit_exp(exp.type, instructions)
+            return emit_exp(exp.root, instructions)
 
         case parser.Identifier(root=name):
             return Var(name=name)
         case parser.Constant():
-            return exp.type
+            return exp.root
         case parser.Unary():
-            return _emit_unary(exp.type, instructions)
+            return _emit_unary(exp.root, instructions)
 
         case parser.FancyAssignment():
             raise ValueError("Should have been gone by this stage!")
@@ -289,7 +289,7 @@ def emit_exp(
                 case _:
                     raise ValueError("NOPE! Bad assignment")
         case parser.BinaryOp():
-            return _emit_binop(exp.type, instructions)
+            return _emit_binop(exp.root, instructions)
 
 
 def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Value:
@@ -298,7 +298,7 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     Mostly because of those darned `++` and `--` operators!
     The devil himself came up with them.
     """
-    operation, factor, pre = unary_op.type, unary_op.exp, unary_op.pre
+    operation, factor, pre = unary_op.op, unary_op.exp, unary_op.pre
     destination: Value
 
     source = emit_exp(factor, instructions)
@@ -317,17 +317,17 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     # The expression itself has already been evaluaded up top
     current: t.Any = factor
     while not isinstance(current, parser.Identifier):
-        match factor.type:
+        match factor.root:
             case parser.Identifier():
-                current = factor.type
+                current = factor.root
             case parser.Unary():
                 # This is MEGA jank!
                 # It's here because `~(a)++` is assignable...
                 # So is ~~~!!!a++ (so on and so forth)
                 # I'm 1000% sure this is wrong, but we hadn't learned operators properly up until then
                 # I CAN'T wait to get rid of these silly nerds.
-                factor = factor.type.exp
-                current = factor.type
+                factor = factor.root.exp
+                current = factor.root
             case _:
                 raise ValueError("Not assignable????")
 
@@ -335,11 +335,11 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
 
     # Note - at this stage this factor _MUST_ be an lvalue
     # Semantic analysis handles that for us
-    lhs = parser.Expression(type=factor)
-    rhs = parser.Expression(type=parser.Factor(type=parser.Constant(root=1)))
+    lhs = parser.Expression(root=factor)
+    rhs = parser.Expression(root=parser.Factor(root=parser.Constant(root=1)))
     intermediate_exp = parser.Expression(
-        type=parser.BinaryOp(
-            type="PLUS" if operation == "++" else "MINUS",
+        root=parser.BinaryOp(
+            op="PLUS" if operation == "++" else "MINUS",
             lhs=lhs,
             rhs=rhs,
         )
@@ -355,7 +355,7 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
 
 
 def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
-    bin_op, lhs, rhs = op.type, op.lhs, op.rhs
+    bin_op, lhs, rhs = op.op, op.lhs, op.rhs
     match bin_op:
         case "AND":
             end = _make_label("and_end")
@@ -667,7 +667,7 @@ class Return(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(return {str(self.root)})"
+        return f"(return {self.root!s})"
 
 
 class Var(BaseModel):
@@ -698,7 +698,7 @@ class Unary(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.source)} {str(self.destination)})"
+        return f"({self.operation} {self.source!s} {self.destination!s})"
 
 
 class BinaryOp(BaseModel):
@@ -709,7 +709,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.src1)} {str(self.src2)})\n(copy {str(self.dest)})"
+        return f"({self.operation} {self.src1!s} {self.src2!s})\n(copy {self.dest!s})"
 
 
 class Copy(BaseModel):
@@ -718,7 +718,7 @@ class Copy(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(copy {str(self.src)} {str(self.dest)})"
+        return f"(copy {self.src!s} {self.dest!s})"
 
 
 class Jump(BaseModel):

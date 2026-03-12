@@ -54,7 +54,7 @@ from shared import pure_functions as pf
 
 
 class Program(BaseModel):
-    function_def: "Function"
+    function_def: Function
 
     @staticmethod
     def from_ast(prog: parser.Program):
@@ -64,7 +64,7 @@ class Program(BaseModel):
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
     return_type: parser.CType
 
     @staticmethod
@@ -106,7 +106,7 @@ class Return(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"(return {repr(self.root)})"
+        return f"(return {self.root!r})"
 
 
 class Var(BaseModel):
@@ -128,7 +128,7 @@ class Unary(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"({self.operation} {repr(self.source)} {repr(self.destination)})"
+        return f"({self.operation} {self.source!r} {self.destination!r})"
 
 
 class BinaryOp(BaseModel):
@@ -139,7 +139,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"({self.operation} {repr(self.src1)} {repr(self.src2)})\n({self.operation} {repr(self.src2)} {repr(self.dest)})"
+        return f"({self.operation} {self.src1!r} {self.src2!r})\n({self.operation} {self.src2!r} {self.dest!r})"
 
 
 class Copy(BaseModel):
@@ -148,7 +148,7 @@ class Copy(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"(copy {repr(self.src)} {repr(self.dest)})"
+        return f"(copy {self.src!r} {self.dest!r})"
 
 
 class Jump(BaseModel):

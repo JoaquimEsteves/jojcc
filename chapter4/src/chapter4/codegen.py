@@ -24,7 +24,6 @@ reg = AX | DX | R10 | R11
 """
 
 import typing as t
-# import functools
 
 from pathlib import Path
 from pydantic import BaseModel, RootModel, model_validator
@@ -38,10 +37,7 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
     """
     Since there's always just the one function...
     """
-    resp: list[str] = [
-        f'.file\t"{filename.name}"',
-        ".text",
-    ] + prog.to_assembly()
+    resp = [f'.file\t"{filename.name}"', ".text", *prog.to_assembly()]
 
     return Ass("\n".join(resp) + "\n")
 
@@ -80,16 +76,14 @@ def map_relational_to_cond_code(code: parser.Relational_Binary) -> Cond_Code:
 
 
 class Program(BaseModel):
-    function: "Function"
+    function: Function
 
     @staticmethod
     def from_tacky(prog: tacky.Program):
         return Program(function=Function.from_tacky(prog.function_def))
 
     def to_assembly(self) -> list[str]:
-        return self.function.to_assembly() + [
-            '.section .note.GNU-stack,"",@progbits',
-        ]
+        return [*self.function.to_assembly(), '.section .note.GNU-stack,"",@progbits']
 
 
 type Get_Val = "t.Callable[[tacky.Value], Imm | Stack]"
@@ -97,7 +91,7 @@ type Get_Val = "t.Callable[[tacky.Value], Imm | Stack]"
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
 
     @staticmethod
     def from_tacky(func: tacky.Function):
@@ -159,7 +153,6 @@ class Function(BaseModel):
 
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
-                    pass
 
         stack_allocation.root = stack_pointer
         return Function(name=func.name, instructions=instructions)

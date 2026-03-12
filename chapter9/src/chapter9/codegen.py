@@ -25,7 +25,6 @@ reg = AX | DX | R10 | R11
 
 from textwrap import dedent
 import typing as t
-# import functools
 
 from pathlib import Path
 from pydantic import BaseModel, RootModel, model_validator
@@ -44,10 +43,7 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
     """
     Since there's always just the one function...
     """
-    resp: list[str] = [
-        f'.file\t"{filename.name}"',
-        ".text",
-    ] + prog.to_assembly()
+    resp = [f'.file\t"{filename.name}"', ".text", *prog.to_assembly()]
 
     return Ass("\n".join(resp) + "\n")
 
@@ -114,7 +110,7 @@ type Get_Val = "t.Callable[[tacky.Value | Pseudo | int], Imm | Stack | Reg]"
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
 
     @t.override
     def __str__(self):
@@ -212,7 +208,6 @@ class Function(BaseModel):
 
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
-                    pass
 
         stack_allocation.root = stack_pointer - (stack_pointer % 16)
         return Function(name=func.name, instructions=instructions)
@@ -507,7 +502,6 @@ class AllocateStack(BaseModel):
     root: int = 0
 
     def to_assembly(self) -> str:
-        # assert self.root % 16 == 0, "Not 16-byte aligned!!!"
         if dt.USE_ONLY_RBP.get():
             return f"subq ${abs(self.root)}, %rbp"
         return f"subq ${abs(self.root)}, %rsp"

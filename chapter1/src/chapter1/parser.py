@@ -50,10 +50,10 @@ class Program(BaseModel):
     <program> ::= <function>
     """
 
-    function: "Function"
+    function: Function
 
     def __init__(self, tokens: lexer.Lexed):
-        return super().__init__(function=Function(tokens))
+        super().__init__(function=Function(tokens))
 
 
 class Function(BaseModel):
@@ -99,7 +99,7 @@ class Function(BaseModel):
 
         body = rest[0:closing_bracket_index]
 
-        return super().__init__(
+        super().__init__(
             return_type=CType(type),
             name=Identifier(identifier),
             body=Statement(body),
@@ -110,7 +110,7 @@ class CType(RootModel[str]):
     def __init__(self, token: lexer.Token_Lexed):
         assert token[0] == "INT_KEYWORD", "I know of no other CTypes! Sorry"
         assert token[1] == "int"
-        return super().__init__(root=token[1])  # pyright: ignore[reportUnknownMemberType]
+        super().__init__(root=token[1])  # pyright: ignore[reportUnknownMemberType]
 
 
 class ReturnStatement(BaseModel):
@@ -122,21 +122,21 @@ class ReturnStatement(BaseModel):
         assert semicolon == ";", "Where's the ';' brother?"
         assert not rest, "Found something after the semi-colon!"
 
-        return super().__init__(exp=Expression(exp))
+        super().__init__(exp=Expression(exp))
 
 
 class IfStatement(BaseModel):
     condition: Expression
-    else_s: "Statement | None" = None
+    else_s: Statement | None = None
 
-    def __init__(self, tokens: lexer.Lexed):
+    def __init__(self, tokens: lexer.Lexed):  # noqa: ARG002
         super().__init__(condition="xD")
         raise NotImplementedError
 
 
 class Statement(RootModel[IfStatement | ReturnStatement]):
     def __init__(self, tokens: lexer.Lexed):
-        return super().__init__(root=ReturnStatement(tokens))  # pyright: ignore[reportUnknownMemberType]
+        super().__init__(root=ReturnStatement(tokens))  # pyright: ignore[reportUnknownMemberType]
 
 
 class Expression(RootModel[int]):
@@ -144,7 +144,7 @@ class Expression(RootModel[int]):
         token, identifier, _ = tokens
         assert token == "CONSTANT", "The only expression I know are constants"
 
-        return super().__init__(root=identifier)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]
+        super().__init__(root=identifier)  # pyright: ignore[reportArgumentType, reportUnknownMemberType]
 
 
 class Identifier(RootModel[str]):
@@ -152,4 +152,4 @@ class Identifier(RootModel[str]):
         token, identifier, _ = tokens
         assert token == "IDENTIFIER", "Not an identifier!"
 
-        return super().__init__(root=identifier)  # pyright: ignore[reportUnknownMemberType]
+        super().__init__(root=identifier)  # pyright: ignore[reportUnknownMemberType]

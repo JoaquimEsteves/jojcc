@@ -55,7 +55,7 @@ def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | No
     # Traditionally PREPROCESSED_FILES have the `.i` extension
 
     assembly_paths: list[Path] = []
-    for filename, ass in zip(filenames, asses):
+    for filename, ass in zip(filenames, asses, strict=True):
         assembly_path = _file_extensions(filename, ".c$", "s")
         if output_file is None:
             # just grab the first one lol
@@ -181,7 +181,7 @@ type AST = list[str]
 
 def lexer(input: Path):
     pre = preprocess(input)
-    with open(pre.root, "r") as f:
+    with open(pre.root) as f:
         return pre, lex(f.read())
 
 
@@ -204,7 +204,7 @@ def main():
 
     if output_file and len(filenames) > 1 and any((c_flag, S_flag)):
         raise ValueError(
-            "cannot specify ‘-o’ with ‘-c’, ‘-S’ or ‘-E’ with multiple files"
+            "cannot specify `-o` with `-c`, `-S` or `-E` with multiple files"
         )
 
     full_assembly: list[codegen.Ass] = []

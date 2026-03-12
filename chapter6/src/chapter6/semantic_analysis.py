@@ -159,7 +159,7 @@ def resolve_assignable(
     if isinstance(identifier, (parser.Expression, parser.Factor)):
         current = identifier
         # Solves situations like so:
-        # ((((((2))))))
+        # `((((((2))))))`
         #
         # Note: This SHOULD have been taken care of before we hit this spot
         # But just in case...

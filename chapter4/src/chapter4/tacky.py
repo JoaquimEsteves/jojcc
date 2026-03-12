@@ -52,7 +52,7 @@ import shared.data_types as dt
 
 
 class Program(BaseModel):
-    function_def: "Function"
+    function_def: Function
 
     @staticmethod
     def from_ast(prog: parser.Program):
@@ -61,7 +61,7 @@ class Program(BaseModel):
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
     return_type: parser.CType
 
     @staticmethod
@@ -145,7 +145,7 @@ class Label(BaseModel):
 def return_to_tacky(ret: parser.ReturnStatement):
     instructions: list[Instruction] = []
     final = emit_tacky(ret.exp, instructions)
-    return instructions + [Return(root=final)]
+    return [*instructions, Return(root=final)]
 
 
 _temp_var_counter = -1

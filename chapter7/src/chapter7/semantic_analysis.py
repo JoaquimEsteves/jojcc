@@ -36,9 +36,7 @@ class Variable_Map(BaseModel):
     def valid_declaration(self, name: str):
         if name not in self.data:
             return True
-        if not self.data[name].from_current_block:
-            return True
-        return False
+        return not self.data[name].from_current_block
 
     def __getitem__(self, name: str):
         entry = self.data.get(name)
@@ -68,9 +66,7 @@ class Label_Map(BaseModel):
     data: dict[str, str] = {}
 
     def valid_declaration(self, name: str):
-        if name not in self.data:
-            return True
-        return False
+        return name not in self.data
 
     def __getitem__(self, name: str):
         return self.data.get(name)
@@ -235,7 +231,7 @@ def resolve_assignable(
     if isinstance(identifier, (parser.Expression, parser.Factor)):
         current = identifier
         # Solves situations like so:
-        # ((((((2))))))
+        # `((((((2))))))`
         #
         # Note: This SHOULD have been taken care of before we hit this spot
         # But just in case...

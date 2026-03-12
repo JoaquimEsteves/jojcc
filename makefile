@@ -58,7 +58,7 @@ MARKDOWN_FILES := $(shell git ls-files '*.md')
 FORMATTED_MARKDOWN := $(addprefix $(MAKE_CACHE)/Formatted_, $(MARKDOWN_FILES))
 
 lint: $(VENV) $(FORMATTED_MARKDOWN) | $(MAKE_CACHE)
-	uv run ruff check
+	uv run ruff check --output-format=concise 
 	uv run ruff format --check
 .PHONY: lint
 

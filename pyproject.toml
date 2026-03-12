@@ -68,6 +68,98 @@ extend-exclude = [
     # External code yo
     "writing-a-c-compiler-tests",
 ]
+[tool.ruff.lint]
+select = [
+    # Subset of pycodestyle
+    "E4",
+    "E7",
+    "E9",
+    # pyflakes
+    "F",
+    # Bug-bear
+    'B',
+    # Deletes commented code
+    'ERA',
+    'S',
+    'FBT',
+    # Shadowing
+    'A',
+    # Comprehension stuff
+    'C4',
+    # debugger
+    'DTZ',
+    # Shebang checker
+    'EXE',
+    # Implicit string-concat
+    'ISC',
+    # Import conventions
+    'ICN',
+    # Goddamn __init__.py
+    'INP',
+    # Misc stuff
+    # Mostly unecessary `pass`
+    'PIE',
+    # Look for `print`
+    # We ignore it since I use it a lot on the compiler-driver
+    # 'T20',
+    # Pytest stuff
+    'PT',
+    # Return rules
+    'RET',
+    # "Simplifications"
+    'SIM',
+    # TODO stuff
+    'TD',
+    # Unused arguments
+    'ARG',
+    # Numpy-stuff
+    'NPY',
+    # Pandas stuff
+    'PD',
+    'PERF',
+    'PLE',
+    # python versioning stuff
+    'UP',
+    # Trivial refactoring things that sometimes slip through
+    'FURB',
+    # Ruff specific rules
+    'RUF',
+    # Prevent exception-handling antipatterns
+    'TRY'
+]
+
+ignore = [
+    # It's fine so long as the variable is a throw-away or meant to be a global
+    'B039',
+    # Asserts are fine
+    'S101',
+    # We validate everything anyway, so it's fine
+    'S603',
+    # There's no passwords here
+    'S105',
+    # It's too commmon to do `type =`
+    'A001',
+    'A002',
+    # It's fine to have complex asserts
+    'PT018',
+    # These two are silly
+    'RET501',
+    'RET502',
+    # Unecessary assignment before return is fine
+    # It's obvious, and probably just there for flow
+    'RET504',
+    # If-else-expressions are sometimes too long
+    'SIM108',
+    # Not all todos need a stupid github link
+    'TD003',
+    # In this project - I'm the only dev, so no need to check
+    'TD002',
+    # Long messages are totally fine
+    'TRY003',
+]
+
+[tool.ruff.format]
+docstring-code-format = true
 
 [tool.pyright]
 exclude = [

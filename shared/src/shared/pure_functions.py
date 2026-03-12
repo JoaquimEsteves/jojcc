@@ -50,11 +50,7 @@ def get_literal_vals[T](alias: T) -> frozenset[T]:
     return frozenset(tuple(resolve(alias)))
 
 
-# my jank-ass neovim setup is not showing the colours properly
-T = t.TypeVar("T")
-
-
-def try_call(func: t.Callable[[], T], *exceptions: type[BaseException]):
+def try_call[T](func: t.Callable[[], T], *exceptions: type[BaseException]):
     """
     Make exceptions STFU
     """
@@ -71,9 +67,7 @@ def indent(text: str):
 def set_context[T](context: ContextVar[T], val: T):
     token = context.set(val)
     yield
-    # before = context.get()
     context.reset(token)
-    # print(f'popped context {before=} after={context.get()}')
 
 
 def to_valid_c_name(text: str) -> dt.Identifier:

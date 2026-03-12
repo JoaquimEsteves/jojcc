@@ -55,7 +55,7 @@ Notes:
 
 > While parsing <block-item>, you need a way to tell whether the current block
 > item is a statement or a declaration. To do this, peek at the first token; if
-> it’s the int keyword, it’s a declaration, and otherwise it’s a statement.
+> it's the int keyword, it's a declaration, and otherwise it's a statement.
 
 """
 
@@ -93,6 +93,10 @@ class Program(BaseModel):
 class Specifiers:
     """
 
+    <specifier> ::= <type-specifier> | "static" | "extern"
+    <type-specifier> ::= "int" | "long"
+
+
     Returns the ctype and storage-class given some tokens.
 
     (In the book they have a separate `parse_types` function, but to me it seems simpler to just
@@ -119,11 +123,9 @@ class Specifiers:
     def from_tokens(
         tokens: lexer.Lexed,
     ) -> tuple[tuple[CType, Specifiers.Storage_Class | None], lexer.Lexed]:
-        # Interestingly the book recommends implementing this as a list I
-        # suspect that this is because of stuff like `extern struct foo`,
-        # pointers and other shenanigans.
-
-        types: list[CType] = []
+        types: list[
+            CType
+        ] = []  # it's a list, because `long int` and `long` and `int long` are equivalent
         storage_classes: list[Specifiers.Storage_Class] = []
 
         while tokens:
@@ -150,7 +152,7 @@ class Specifiers:
         if len(types) == 2:
             # shit! It's weird but it's OK to define a long as
             # int static long
-            as_set = {str(t.root.root) for t in types}
+            as_set = {str(t.root.root) for t in types}  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
             assert as_set == {"long", "int"}
             types = [CType(root=TrivialType(root="long"))]
 
@@ -226,11 +228,10 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
 
 class Function_Declaration(BaseModel):
     """
-    <function-declaration> ::= "int" <identifier> "(" <param-list> ")" (<block> | ";")
+    <function-declaration> ::= {<specifier>}+ <identifier> "(" <param-list> ")" (<block> | ";")
     """
 
     type: CType.FuncType
-    # return_type: CType
     name: Identifier
     param_list: list[Identifier]
     body: Block | None
@@ -242,7 +243,7 @@ class Function_Declaration(BaseModel):
         if self.param_list:
             param_list = str(
                 {
-                    param.root: self.type.params[index].root
+                    param.root: str(self.type.params[index])
                     for index, param in enumerate(self.param_list)
                 }
             ).replace("'", "")
@@ -251,7 +252,7 @@ class Function_Declaration(BaseModel):
         with pf.set_context(dt.INDENT_LEVEL, 1):
             stuff = [
                 f"('name {self.name})",
-                f"('return_type {self.type.return_type.root})",
+                f"('return_type {self.type.return_type})",
                 f"('storage_class {self.storage})",
                 f"('params {param_list})",
             ]
@@ -315,7 +316,7 @@ class Variable_Declaration(BaseModel):
 
     @t.override
     def __str__(self):
-        pre = f"(let {str(self.name)}:{self.type.root}"
+        pre = f"(let {self.name!s}:{self.type.root}"
         return f"{pre} {self.init or 'undefined'})"
 
 
@@ -370,7 +371,7 @@ class DoWhile(While):
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             res.append(pf.indent(str(self.body)))
-            res.append(pf.indent(f"(while {str(self.condition)}))"))
+            res.append(pf.indent(f"(while {self.condition!s}))"))
 
         return "\n".join(res)
 
@@ -451,7 +452,7 @@ class For(Labelled_Construct):
 
         Expects that the semicolon is passed
         """
-        if not tokens or len(tokens) == 1 and tokens[0][0] == "SEMICOLON":
+        if not tokens or (len(tokens) == 1 and tokens[0][0] == "SEMICOLON"):
             # Perfectly valid
             # for(; 1 ;) {...}
             return None
@@ -472,7 +473,8 @@ class For(Labelled_Construct):
 
 
 class TrivialType(BaseModel):
-    root: t.Literal["int", "long"]
+    type SubType = t.Literal["int", "long"]
+    root: SubType
 
     @staticmethod
     def from_tokens(token: lexer.Token_Lexed):
@@ -484,12 +486,24 @@ class CType(BaseModel):
         return_type: CType
         params: list[CType]
 
-    root: TrivialType | CType
+    root: TrivialType | FuncType
+
+    @staticmethod
+    def from_trivial(which: TrivialType.SubType):
+        return CType(root=TrivialType(root=which))
 
     @staticmethod
     def from_token(token: lexer.Token_Lexed):
         # This is wrong. But whatever
         return CType(root=TrivialType.from_tokens(token))
+
+    @t.override
+    def __str__(self):
+        match self.root:
+            case TrivialType():
+                return str(self.root.root)
+            case CType.FuncType():
+                return f"('return {self.root.return_type.root} '(params ({', '.join(str(p) for p in self.root.params)})))"
 
 
 class ReturnStatement(BaseModel):
@@ -497,17 +511,17 @@ class ReturnStatement(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(return {str(self.exp)})"
+        return f"(return {self.exp!s})"
 
 
 class IfStatement(BaseModel):
     condition: Expression
     then: Statement
-    else_s: "Statement | None" = None
+    else_s: Statement | None = None
 
     @t.override
     def __str__(self):
-        res = f"(if {str(self.condition)}\n"
+        res = f"(if {self.condition!s}\n"
         body = [str(self.then)]
         if self.else_s:
             body.append(str(self.else_s))
@@ -686,7 +700,7 @@ class Goto(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(goto {str(self.label)})"
+        return f"(goto {self.label!s})"
 
 
 class Label(BaseModel):
@@ -695,7 +709,7 @@ class Label(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(label {str(self.label)}\n{pf.indent(str(self.statement))})"
+        return f"(label {self.label!s}\n{pf.indent(str(self.statement))})"
 
 
 class Block(BaseModel):
@@ -747,12 +761,17 @@ class Block(BaseModel):
         return block_item
 
 
-class Expression(BaseModel):
+class Typed(BaseModel):
+    type: CType | None = None
+
+
+class Expression(Typed):
     """
     <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
     """
 
-    type: BinaryOp | Factor | FancyAssignment | NormalAssigment | Conditional
+    type SubType = BinaryOp | Factor | FancyAssignment | NormalAssigment | Conditional
+    root: SubType
 
     @model_validator(mode="after")
     def fix_paren_jank(self):
@@ -763,9 +782,9 @@ class Expression(BaseModel):
         int a = ((((((((2))))))));
         ```
         """
-        match self.type:
-            case Factor(type=Expression(type=inner)):
-                self.type = inner
+        match self.root:
+            case Factor(root=Expression(root=inner)):
+                self.root = inner
             case _:
                 pass
         return self
@@ -781,8 +800,8 @@ class Expression(BaseModel):
         return False
 
     def get_const_expression(self):
-        match self.type:
-            case Factor(type=Constant(root=root)):
+        match self.root:
+            case Factor(root=Constant(root=root)):
                 return root
             # TODO: Stuff like `int a = 1;`
             # is valid if `a` is `const` or the compiler can tell
@@ -792,21 +811,22 @@ class Expression(BaseModel):
                 raise ValueError("Not a const expression bro!")
 
     @staticmethod
-    def from_constant(const: int):
-        return Expression(type=Factor(type=Constant(const)))
+    def from_constant(const: int, ctype: TrivialType):
+        return Expression(root=Factor(root=Constant(root=const, ctype=ctype)))
 
     @staticmethod
     def read_var(name: str):
-        return Expression(type=Factor(type=Identifier(name)))
+        return Expression(root=Factor(root=Identifier(name)))
 
     @t.override
     def __str__(self):
-        return str(self.type)
+        return str(self.root)
 
     @t.overload
     @staticmethod
     def from_tokens(
         tokens: lexer.Lexed,
+        *,
         assert_no_food_left: t.Literal[False] = False,
         min_prec: int = 0,
     ) -> tuple[Expression, lexer.Lexed]: ...
@@ -814,7 +834,7 @@ class Expression(BaseModel):
     @t.overload
     @staticmethod
     def from_tokens(
-        tokens: lexer.Lexed, assert_no_food_left: t.Literal[True], min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: t.Literal[True], min_prec: int = 0
     ) -> Expression:
         """
         If we specify `assert_no_food_left` then we assert that the tokens we _would_ return are empty.
@@ -822,7 +842,7 @@ class Expression(BaseModel):
 
     @staticmethod
     def from_tokens(
-        tokens: lexer.Lexed, assert_no_food_left: bool = False, min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: bool = False, min_prec: int = 0
     ) -> tuple[Expression, lexer.Lexed] | Expression:
         def inner(
             tokens: lexer.Lexed, min_prec: int = 0
@@ -831,10 +851,8 @@ class Expression(BaseModel):
             while right:
                 (operator, _identifier, _), *rest = right
 
-                if operator not in BINARY_OP_PRECEDENCE.keys():
+                if operator not in BINARY_OP_PRECEDENCE:
                     break
-
-                operator = t.cast(Binary_Op_Or_Extras, operator)
 
                 if BINARY_OP_PRECEDENCE[operator] < min_prec:
                     # Let the other nerds handle this!
@@ -844,8 +862,8 @@ class Expression(BaseModel):
                     # shit, I hate these nerds
                     other_rest = rest
                     left = Factor(
-                        type=Unary(
-                            type=operator,
+                        root=Unary(
+                            op=operator,
                             exp=left,  # pyright: ignore[reportArgumentType]
                             pre=False,
                         ),
@@ -857,7 +875,7 @@ class Expression(BaseModel):
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
-                    identifier = Expression(type=left)
+                    identifier = Expression(root=left)
                     left = (
                         FancyAssignment(lhs=identifier, rhs=rhs, type=operator)
                         if operator != "="
@@ -869,20 +887,20 @@ class Expression(BaseModel):
                     assert colon == ":", "BAD IF EXPRESSION"
                     right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
                     left = Conditional(
-                        left=Expression(type=left), middle=middle, right=right
+                        left=Expression(root=left), middle=middle, right=right
                     )
 
                 else:
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
                     left = BinaryOp(
-                        type=operator,  # pyright: ignore[reportArgumentType]
-                        lhs=Expression(type=left),
+                        op=operator,  # pyright: ignore[reportArgumentType]
+                        lhs=Expression(root=left),
                         rhs=rhs,
                     )
                 right = other_rest
 
-            return Expression(type=left), right
+            return Expression(root=left), right
 
         exp, rest = inner(tokens, min_prec)
         if assert_no_food_left:
@@ -919,22 +937,23 @@ class Constant(BaseModel):
         return Constant(root=v, ctype=TrivialType(root="int"))
 
 
-class Factor(BaseModel):
+class Factor(Typed):
     """
     The name `factor` comes from the fact that this symbol can appear as a
     _factor_ in a multiplication expression.
 
     """
 
-    type: Constant | Unary | Expression | Identifier | Func_Call | Cast
+    type SubType = Constant | Unary | Expression | Identifier | Func_Call | Cast
+    root: SubType
 
     @t.override
     def __str__(self):
-        match self.type:
+        match self.root:
             case Constant(root=root):
                 return str(root)
             case _:
-                return str(self.type)
+                return str(self.root)
 
     @staticmethod
     def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
@@ -945,7 +964,7 @@ class Factor(BaseModel):
                 if not rest or rest[0][0] != "OPEN_PARENS":
                     # It's just an identifier
                     return (
-                        Factor(type=ident),
+                        Factor(root=ident),
                         rest,
                     )
 
@@ -954,13 +973,13 @@ class Factor(BaseModel):
                 arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
 
                 return (
-                    Factor(type=Func_Call(name=ident, args=arg_list)),
+                    Factor(root=Func_Call(name=ident, args=arg_list)),
                     rest[corresponding_closed + 1 :],
                 )
             case "CONSTANT" | "LONG_CONSTANT":
                 return (
                     Factor(
-                        type=Constant.from_token(
+                        root=Constant.from_token(
                             (token, identifier, charno),  # pyright: ignore[reportArgumentType]
                         ),
                     ),
@@ -970,11 +989,11 @@ class Factor(BaseModel):
                 if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
                     # shoot, it's a cast!
                     cast, rest = Cast.from_tokens(rest)
-                    return Factor(type=cast), rest
+                    return Factor(root=cast), rest
                 corresponding_closed = get_closing(rest, ")")
                 return (
                     Factor(
-                        type=Expression.from_tokens(
+                        root=Expression.from_tokens(
                             rest[:corresponding_closed], assert_no_food_left=True
                         )
                     ),
@@ -985,7 +1004,7 @@ class Factor(BaseModel):
                 exp, rest = Factor.parse(rest)
                 return (
                     Factor(
-                        type=Unary(type=token, exp=exp),
+                        root=Unary(op=token, exp=exp),
                     ),
                     rest,
                 )
@@ -1033,11 +1052,11 @@ class Cast(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(cast-to-{self.target_type.root.root} {self.exp})"
+        return f"(cast-to-{self.target_type} {self.exp})"
 
 
 class Unary(BaseModel):
-    type: t.Literal[
+    op: t.Literal[
         "COMPLEMENT",
         "MINUS",
         "NOT",
@@ -1049,7 +1068,7 @@ class Unary(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({str(self.type)} {str(self.exp)} {'' if self.pre else 'postfix'})"
+        return f"({self.op!s} {self.exp!s} {'' if self.pre else 'postfix'})"
 
 
 type Simple_Binary = t.Literal[
@@ -1151,13 +1170,13 @@ BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_Extras, int] = {
 
 
 class BinaryOp(BaseModel):
-    type: Binary_Op_Without_Assignment
+    op: Binary_Op_Without_Assignment
     lhs: Expression
     rhs: Expression
 
     @t.override
     def __str__(self):
-        return f"({self.type} {str(self.lhs.type)} {str(self.rhs.type)})"
+        return f"({self.op} {self.lhs.root!s} {self.rhs.root!s})"
 
 
 class NormalAssigment(BaseModel):
@@ -1166,7 +1185,7 @@ class NormalAssigment(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(= {str(self.lhs)} {str(self.rhs.type)})"
+        return f"(= {self.lhs!s} {self.rhs.root!s})"
 
 
 class Conditional(BaseModel):
@@ -1176,7 +1195,7 @@ class Conditional(BaseModel):
 
     @t.override
     def __str__(self):
-        res = f"(if-expr {str(self.left)}\n"
+        res = f"(if-expr {self.left!s}\n"
         body = pf.indent("\n".join(map(str, [self.middle, self.right])))
         return f"{res}{body})"
 
@@ -1202,7 +1221,7 @@ class FancyAssignment(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.type} {str(self.lhs)} {str(self.rhs.type)})"
+        return f"({self.type} {self.lhs!s} {self.rhs.root!s})"
 
 
 class Identifier(RootModel[str]):

@@ -24,7 +24,7 @@ Notes:
 
 > While parsing <block-item>, you need a way to tell whether the current block
 > item is a statement or a declaration. To do this, peek at the first token; if
-> it’s the int keyword, it’s a declaration, and otherwise it’s a statement.
+> it's the int keyword, it's a declaration, and otherwise it's a statement.
 
 """
 
@@ -138,7 +138,7 @@ class Declaration(BaseModel):
 
     @t.override
     def __repr__(self):
-        pre = f"(let {repr(self.name)}:{self.type.root}"
+        pre = f"(let {self.name!r}:{self.type.root}"
         if not self.init:
             return pre + ")"
         return f"{pre} '{self.init or 'void'})"
@@ -205,14 +205,14 @@ class ReturnStatement(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"(return {repr(self.exp)})"
+        return f"(return {self.exp!r})"
 
 
 class IfStatement(BaseModel):
     condition: Expression
-    else_s: "Statement | None" = None
+    else_s: Statement | None = None
 
-    def __init__(self, tokens: lexer.Lexed):
+    def __init__(self, tokens: lexer.Lexed):  # noqa: ARG002
         super().__init__(condition="xD")
         raise NotImplementedError
 
@@ -266,6 +266,7 @@ class Expression(BaseModel):
     @staticmethod
     def parse(
         tokens: lexer.Lexed,
+        *,
         assert_no_food_left: t.Literal[False] = False,
         min_prec: int = 0,
     ) -> tuple[Expression, lexer.Lexed]: ...
@@ -273,7 +274,7 @@ class Expression(BaseModel):
     @t.overload
     @staticmethod
     def parse(
-        tokens: lexer.Lexed, assert_no_food_left: t.Literal[True], min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: t.Literal[True], min_prec: int = 0
     ) -> Expression:
         """
         If we specify `assert_no_food_left` then we assert that the tokens we _would_ return are empty.
@@ -281,7 +282,7 @@ class Expression(BaseModel):
 
     @staticmethod
     def parse(
-        tokens: lexer.Lexed, assert_no_food_left: bool = False, min_prec: int = 0
+        tokens: lexer.Lexed, *, assert_no_food_left: bool = False, min_prec: int = 0
     ) -> tuple[Expression, lexer.Lexed] | Expression:
         def inner(
             tokens: lexer.Lexed, min_prec: int = 0
@@ -290,10 +291,8 @@ class Expression(BaseModel):
             while right:
                 (operator, _identifier, _), *rest = right
 
-                if operator not in BINARY_OP_PRECEDENCE.keys():
+                if operator not in BINARY_OP_PRECEDENCE:
                     break
-
-                operator = t.cast(Binary_Operation, operator)
 
                 if BINARY_OP_PRECEDENCE[operator] < min_prec:
                     # Let the other nerds handle this!
@@ -362,7 +361,7 @@ class Factor(BaseModel):
             case Constant(root=root):
                 return repr(root)
             case Unary(type=type, exp=exp, pre=pre):
-                return f"({repr(type)} {repr(exp)} {'' if pre else 'postfix'})"
+                return f"({type!r} {exp!r} {'' if pre else 'postfix'})"
             case Expression() | Identifier():
                 return repr(self.type)
 
@@ -403,7 +402,7 @@ class Factor(BaseModel):
                 if next_token in ("++", "--"):
                     # special case! I hate these nerds
                     factor, food_left = Factor.parse(
-                        rest[:corresponding_closed] + [rest[corresponding_closed + 1]]
+                        [*rest[:corresponding_closed], rest[corresponding_closed + 1]]
                     )
                     assert food_left == [], "We left food on the table!"
                     return Factor(type=Expression(type=factor)), rest[
@@ -529,7 +528,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"({self.type} {repr(self.lhs.type)} {repr(self.rhs.type)})"
+        return f"({self.type} {self.lhs.type!r} {self.rhs.type!r})"
 
 
 class NormalAssigment(BaseModel):
@@ -538,7 +537,7 @@ class NormalAssigment(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"(= {repr(self.lhs)} {repr(self.rhs.type)})"
+        return f"(= {self.lhs!r} {self.rhs.type!r})"
 
 
 class FancyAssignment(BaseModel):
@@ -548,7 +547,7 @@ class FancyAssignment(BaseModel):
 
     @t.override
     def __repr__(self):
-        return f"({self.type} {repr(self.lhs)} {repr(self.rhs.type)})"
+        return f"({self.type} {self.lhs!r} {self.rhs.type!r})"
 
 
 class Identifier(RootModel[str]):

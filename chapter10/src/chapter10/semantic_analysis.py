@@ -82,11 +82,11 @@ class Identifier_Table(BaseModel):
             # perfectly fine (but weird)
             # Examples:
             # ```c
-            # int printf = 5;
-            # if (printf > 1) {
-            #   int printf(const char *, ...);
-            #   printf("it just works!\n")
-            # }
+            # //int printf = 5;
+            # //if (printf > 1) {
+            # //  int printf(const char *, ...);
+            # //  printf("it just works!\n")
+            # //}
             # ```
             #
             return True
@@ -95,9 +95,7 @@ class Identifier_Table(BaseModel):
         return prev.has_linkage
 
     def valid_func_call(self, name: str):
-        if name not in self.data:
-            return False
-        return True
+        return name in self.data
 
     def __getitem__(self, name: str):
         entry = self.data.get(name)
@@ -127,7 +125,7 @@ class Identifier_Table(BaseModel):
 
     def get_copy(self):
         return Identifier_Table(
-            data={key: val for (key, val) in self.data.items()},
+            data=dict(self.data),
             scope=self.scope + 1,
         )
 
@@ -220,9 +218,7 @@ class Label_Map(BaseModel):
     data: dict[str, str] = {}
 
     def valid_declaration(self, name: str):
-        if name not in self.data:
-            return True
-        return False
+        return name not in self.data
 
     def __getitem__(self, name: str):
         return self.data.get(name)
@@ -396,7 +392,7 @@ def resolve_function_declaration(func: parser.Function_Declaration):
             # Note - that we're in the same scope.
             # int foo(int a) { int a = 2; }
             # is ILLEGAL
-            with pf.set_context(IS_TOP_LEVEL, False):
+            with pf.set_context(IS_TOP_LEVEL, val=False):
                 body = resolve_block(func.body)
         else:
             body = None
@@ -461,10 +457,10 @@ def resolve_declaration(decl: parser.Variable_Declaration):
     if decl.storage == "extern":
         variable_map.add_external(decl)
         # According to the book we do this in the type-checking phase
-        # if variable_map.scope != 0 and decl.init is not None:
-        #     raise ValueError(
-        #         "Declaration of block scope identifier with linkage cannot have an initializer"
-        #     )
+        # // if variable_map.scope != 0 and decl.init is not None:
+        # //     raise ValueError(
+        # //         "Declaration of block scope identifier with linkage cannot have an initializer"
+        # //     )
         return decl
 
     old_name = decl.name.root
@@ -616,7 +612,7 @@ def resolve_assignable(
     if isinstance(identifier, (parser.Expression, parser.Factor)):
         current = identifier
         # Solves situations like so:
-        # ((((((2))))))
+        # ((((((2))))))  # noqa: ERA001
         #
         # Note: This SHOULD have been taken care of before we hit this spot
         # But just in case...
@@ -786,18 +782,18 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
 # Sadly - that did *NOT* work out because of the following bullshit:
 #
 # ```
-# int main(void) {
-#    int foo = randnumber();
-#    if (foo > 0) {
-#        int foo(void); // VALID
-#        return foo();
-#    }
-#    return foo;
-# }
+# // int main(void) {
+# //    int foo = randnumber();
+# //    if (foo > 0) {
+# //        int foo(void); // VALID
+# //        return foo();
+# //    }
+# //    return foo;
+# // }
 #
-# int foo(int a) { // ERROR! Foo DECLARED DIFFERENTLY
-#    return 8;
-# }
+# // int foo(int a) { // ERROR! Foo DECLARED DIFFERENTLY
+# //    return 8;
+# // }
 # ```
 #
 # If I try to `keep_relevant` on the identifier-table, then we'll get an error!
@@ -815,7 +811,6 @@ def type_check_function(func: parser.Function_Declaration):
 
     # For now - every function just returns an int and accepts ints
     # So the only thing that matters is how many ints there are
-    # func_type = len(func.param_list)
     has_body = func.body is not None
     name = func.name.root
 
@@ -979,7 +974,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, tuple):
-                raise ValueError("Type Error!")
+                raise TypeError()
             if len(old.type[1]) != len(args):
                 raise ValueError("Incorrect number of arguments!")
         case parser.Factor() | parser.Expression():
@@ -1013,7 +1008,7 @@ def type_check_identifier(ident: parser.Identifier):
     name = ident.root
     old = SYMBOL_TABLE.get().data[name]
     if not isinstance(old.type, parser.CType):
-        raise ValueError("Type Error!")
+        raise TypeError()
 
 
 def type_check_statement(stmt: parser.Statement):

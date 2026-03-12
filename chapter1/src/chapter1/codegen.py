@@ -6,8 +6,6 @@ function_definition = Function(identifier name, instruction* instructions)
 instruction = Mov(operand src, operand dst) | Ret
 operand = Imm(int) | Register
 ```
-
-
 ```
 | AST node                     | Assembly construct           |
 | ---                          | ---                          |
@@ -29,12 +27,12 @@ class Ass(RootModel[str]):
 
 
 class Program(BaseModel):
-    function: "Function"
+    function: Function
 
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Return]"
+    instructions: list[Return]
 
 
 class Return(RootModel[parser.ReturnStatement]):

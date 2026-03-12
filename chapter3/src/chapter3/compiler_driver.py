@@ -128,7 +128,7 @@ type AST = list[str]
 
 def lexer(input: Path):
     pre = preprocess(input)
-    with open(pre.root, "r") as f:
+    with open(pre.root) as f:
         return pre, lex(f.read())
 
 

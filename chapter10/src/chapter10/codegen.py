@@ -25,7 +25,6 @@ reg = AX | DX | R10 | R11
 
 from textwrap import dedent
 import typing as t
-# import functools
 
 from pathlib import Path
 from pydantic import BaseModel, RootModel, model_validator
@@ -44,9 +43,7 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
     """
     Since there's always just the one function...
     """
-    resp: list[str] = [
-        f'.file\t"{filename.name}"',
-    ] + prog.to_assembly()
+    resp = [f'.file\t"{filename.name}"', *prog.to_assembly()]
 
     return Ass("\n".join(resp) + "\n")
 
@@ -117,7 +114,7 @@ type Get_Val = "t.Callable[[tacky.Value | Pseudo], Operand]"
 class Function(BaseModel):
     name: str
     is_global: bool
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
 
     @t.override
     def __str__(self):
@@ -161,10 +158,8 @@ class Function(BaseModel):
                         return Data(root=name)
 
                     return Stack(root=get_stack(name))
-                    # return Pseudo(root=name)
                 case Pseudo(root=name):
                     return Stack(root=get_stack(name))
-                    # return value
 
         for index in reversed(range(len(func.params))):
             arg_source = _get_system_v_call_convention(index)
@@ -220,7 +215,6 @@ class Function(BaseModel):
 
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
-                    pass
 
         # TODO: A PASS HERE THAT CONVERTS FROM PSEUDO TO REGISTERS/STACK
 
@@ -526,7 +520,6 @@ class AllocateStack(BaseModel):
     root: int = 0
 
     def to_assembly(self) -> str:
-        # assert self.root % 16 == 0, "Not 16-byte aligned!!!"
         if dt.USE_ONLY_RBP.get():
             return f"subq ${abs(self.root)}, %rbp"
         return f"subq ${abs(self.root)}, %rsp"
@@ -622,8 +615,6 @@ class Return(BaseModel):
 
 
 type Operand = Imm | Reg | Stack | Data | Pseudo
-# Pseudo are replaced
-# type AnyOperand = Operand | Pseudo
 
 
 class Imm(BaseModel):

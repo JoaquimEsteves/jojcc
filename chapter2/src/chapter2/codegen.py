@@ -13,7 +13,6 @@ reg = AX | R10
 """
 
 import typing as t
-# import functools
 
 from pathlib import Path
 from pydantic import BaseModel, RootModel, model_validator
@@ -27,21 +26,19 @@ class Ass(RootModel[str]):
 
 
 class Program(BaseModel):
-    function: "Function"
+    function: Function
 
     @staticmethod
     def from_tacky(prog: tacky.Program):
         return Program(function=Function.from_tacky(prog.function_def))
 
     def to_assembly(self):
-        return self.function.to_assembly() + [
-            '.section .note.GNU-stack,"",@progbits',
-        ]
+        return [*self.function.to_assembly(), '.section .note.GNU-stack,"",@progbits']
 
 
 class Function(BaseModel):
     name: str
-    instructions: "list[Instruction]"
+    instructions: list[Instruction]
 
     @staticmethod
     def from_tacky(func: tacky.Function):
@@ -197,9 +194,6 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
     """
     Since there's always just the one function...
     """
-    resp: list[str] = [
-        f'.file\t"{filename.name}"',
-        ".text",
-    ] + prog.to_assembly()
+    resp = [f'.file\t"{filename.name}"', ".text", *prog.to_assembly()]
 
     return Ass("\n".join(resp) + "\n")

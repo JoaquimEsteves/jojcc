@@ -198,10 +198,10 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
             # expression is “replaced by a nonzero constant” (section 6.8.5.3,
             # paragraph 2)
             # But the book also says that we can ignore that shit
-            # else:
-            #   instructions.append(
-            #      JumpIfZero(condition=parser.Constant(1), target=break_label)
-            #   )
+            # //else:
+            # //  instructions.append(
+            # //     JumpIfZero(condition=parser.Constant(1), target=break_label)
+            # //  )
             _ = emit_tacky(body, instructions)
             instructions.append(continue_label)
             if post:
@@ -534,7 +534,7 @@ type Valid_Identifier = t.Annotated[dt.Identifier, BeforeValidator(pf.to_valid_c
 
 
 class Program(BaseModel):
-    function_defs: list["Function_Definition"]
+    function_defs: list[Function_Definition]
 
     @staticmethod
     def from_ast(prog: parser.Program):
@@ -616,7 +616,7 @@ class Return(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(return {str(self.root)})"
+        return f"(return {self.root!s})"
 
 
 class Var(BaseModel):
@@ -638,7 +638,7 @@ class Unary(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.source)} {str(self.destination)})"
+        return f"({self.operation} {self.source!s} {self.destination!s})"
 
 
 class BinaryOp(BaseModel):
@@ -649,7 +649,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {str(self.src1)} {str(self.src2)})\n(copy {str(self.dest)})"
+        return f"({self.operation} {self.src1!s} {self.src2!s})\n(copy {self.dest!s})"
 
 
 class Copy(BaseModel):
@@ -658,7 +658,7 @@ class Copy(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"(copy {str(self.src)} {str(self.dest)})"
+        return f"(copy {self.src!s} {self.dest!s})"
 
 
 class Jump(BaseModel):
