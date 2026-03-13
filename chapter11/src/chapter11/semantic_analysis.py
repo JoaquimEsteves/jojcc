@@ -191,8 +191,8 @@ class Symbol_Table(BaseModel):
         # If an old exists, it _must_ be a static-variable
         # (If it was a local then variable-declaration would be an invalid double-declaration)
         assert isinstance(old, Symbol_Table.Static)
-        assert old.type == decl.type.root, (
-            f"Types are different {old.type=} {decl.type.root=}"
+        assert old.type.root == decl.type.root, (
+            f"Types are different {old.type=} {decl.type=}"
         )
 
     def __contains__(self, name: str | parser.Identifier):
@@ -211,20 +211,18 @@ class Symbol_Table(BaseModel):
 
     class Static(BaseModel):
         class StaticInit(BaseModel):
-            type: parser.TrivialType.SubType
             val: int
 
             @staticmethod
             def from_declaration(decl: parser.Variable_Declaration, *, mutate: bool):
-                assert isinstance(decl.type.root, parser.TrivialType)
-                type = decl.type.root.root
                 val = (
-                    decl.init.get_const_expression(cast_to=type, mutate=mutate)
+                    decl.init.get_const_expression(
+                        cast_to=decl.type.get_trivial(), mutate=mutate
+                    )
                     if decl.init
                     else 0
                 )
                 return Symbol_Table.Static.StaticInit(
-                    type=type,
                     val=val,
                 )
 
@@ -393,11 +391,23 @@ def resolve_program(prog: parser.Program):
             if not fixed.body:
                 return fixed
 
+        # From the book:
+        # > In Chapter 5, I mentioned that we add an extra Return instruction
+        # > to the end of each TACKY function, in case not every execution path
+        # > in the original C function reaches a return statement. This extra
+        # > instruction can always return ConstInt(0), even when the function's
+        # > return type isn't int. When we return from main, this is the correct
+        # > return type. When we return from any other function that's missing an
+        # > explicit return statement, the return value is undefined. We still
+        # > need to return control to the caller, but we aren't obligated to
+        # > return any particular value, so it doesn't matter if we get the type
+        # > wrong.
+
         return_zero = parser.Statement(
             root=parser.ReturnStatement(
                 exp=parser.Expression.from_constant(
                     0,
-                    fixed.type.return_type.root,  # pyright: ignore[reportArgumentType]
+                    parser.CType(root="int"),
                 )
             )
         )
@@ -679,18 +689,21 @@ def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
                     assert isinstance(lvalue.root.root, parser.Identifier)
                     identifier: parser.Identifier = lvalue.root.root
                     return parser.Expression(
+                        type=None,
                         root=parser.Factor(
-                            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get())
-                        )
+                            type=None,
+                            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()),
+                        ),
                     )
                 case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
                     return parser.Expression(
+                        type=None,
                         root=parser.Normal_Assignment(
                             # The LHS _must_ be an identifier or something
                             # that resolves to an identifier
                             lhs=resolve_valid_lvalue(lhs),
                             rhs=resolve_expression(rhs),
-                        )
+                        ),
                     )
                 case _:
                     raise ValueError(
@@ -722,19 +735,25 @@ def resolve_post_and_prefix_assignable(
             # This is a valid assignable value `~a++`
             assert current.op not in ("++", "--")
             return parser.Expression(
+                type=None,
                 root=parser.Factor(
+                    type=None,
                     root=parser.Unary(
                         op=current.op,
                         exp=resolve_post_and_prefix_assignable(current.exp).root,  # pyright: ignore[reportArgumentType, reportUnknownArgumentType, reportUnknownMemberType]
                         pre=current.pre,
-                    )
-                )
+                    ),
+                ),
             )
         assert isinstance(current, parser.Identifier), f"{current} is not assignable!"
         identifier = current
 
     return parser.Expression(
-        root=parser.Factor(root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()))
+        type=None,
+        root=parser.Factor(
+            type=None,
+            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()),
+        ),
     )
 
 
@@ -775,37 +794,44 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
                 exp.root, (parser.Normal_Assignment, parser.Fancy_Assignment)
             ), "LValue bullshit"
             return parser.Factor(
-                root=parser.Cast(target_type=target_type, exp=resolve_expression(exp))
+                type=None,
+                root=parser.Cast(target_type=target_type, exp=resolve_expression(exp)),
             )
         case parser.Constant():
             return factor
         case parser.Expression():
-            return parser.Factor(root=resolve_expression(factor.root))
+            return parser.Factor(
+                type=None,
+                root=resolve_expression(factor.root),
+            )
         case parser.Identifier():
             return parser.Factor(
-                root=resolve_identifier(factor.root, IDENTIFIER_TABLE.get())
+                type=None, root=resolve_identifier(factor.root, IDENTIFIER_TABLE.get())
             )
         case parser.Unary(op=op, exp=exp, pre=pre):
             if op not in ("++", "--"):
                 return parser.Factor(
-                    root=parser.Unary(op=op, exp=resolve_factor(exp), pre=pre)
+                    type=None,
+                    root=parser.Unary(op=op, exp=resolve_factor(exp), pre=pre),
                 )
             return parser.Factor(
+                type=None,
                 root=parser.Unary(
                     op=op,
                     exp=resolve_post_and_prefix_assignable(exp).root,  # pyright: ignore[reportArgumentType]
                     pre=pre,
-                )
+                ),
             )
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             identifier_table = IDENTIFIER_TABLE.get()
             assert identifier_table.valid_func_call(name), "Undeclared function!"
             new_name: str = identifier_table[name]  # pyright: ignore[reportAssignmentType]
             return parser.Factor(
+                type=None,
                 root=parser.Func_Call(
                     name=parser.Identifier(new_name),
                     args=[resolve_expression(arg) for arg in args],
-                )
+                ),
             )
 
 
@@ -813,34 +839,37 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
     match exp.root:
         case parser.Conditional(left=left, middle=middle, right=right):
             return parser.Expression(
+                type=None,
                 root=parser.Conditional(
                     left=resolve_expression(left),
                     middle=resolve_expression(middle),
                     right=resolve_expression(right),
-                )
+                ),
             )
         case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
             return parser.Expression(
+                type=None,
                 root=parser.Normal_Assignment(
                     lhs=resolve_valid_lvalue(lhs),
                     rhs=resolve_expression(rhs),
-                )
+                ),
             )
         case parser.Fancy_Assignment():
             return resolve_expression(
-                parser.Expression(root=exp.root.to_normal_assignment())
+                parser.Expression(root=exp.root.to_normal_assignment(), type=None)
             )
 
         case parser.Factor():
-            return parser.Expression(root=resolve_factor(exp.root))
+            return parser.Expression(root=resolve_factor(exp.root), type=None)
 
         case parser.BinaryOp(lhs=lhs, rhs=rhs, op=op):
             return parser.Expression(
+                type=None,
                 root=parser.BinaryOp(
                     op=op,
                     lhs=resolve_expression(lhs),
                     rhs=resolve_expression(rhs),
-                )
+                ),
             )
 
 
@@ -1042,7 +1071,7 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
                 pass
 
     symbol_table.data[decl.name.root] = Symbol_Table.Static(
-        type=decl.type.root,  # pyright: ignore[reportArgumentType]
+        type=decl.type,
         initial_value=initial_value,
         is_global=is_global,
     )
@@ -1054,7 +1083,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
     match exp.root:
         case parser.Identifier(root=name):
             exp_type = type_check_identifier_is_not_function(exp.root)
-            exp.type = parser.CType(root=exp_type)
+            exp.type = exp_type
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, parser.CType.FuncType):
@@ -1107,12 +1136,12 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
                 ):
                     exp.type = exp.root.lhs.type
                 case "LE" | "LT" | "GT" | "GE" | "==" | "!=":
-                    exp.type = parser.CType(root=parser.TrivialType(root="int"))
+                    exp.type = parser.CType(root="int")
 
         case parser.Unary(op=op, exp=inner):
             type_check_expression(inner)
             if op == "NOT":
-                exp.type = parser.CType(root=parser.TrivialType(root="int"))
+                exp.type = parser.CType(root="int")
             exp.type = inner.type
         case parser.Conditional(left=left, middle=middle, right=right):
             for sub in (left, middle, right):
@@ -1128,9 +1157,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
                     type_check_expression(lhs)
                     typed_left = lhs.type
                 case parser.Identifier():
-                    old_type = parser.CType(
-                        root=type_check_identifier_is_not_function(lhs)
-                    )
+                    old_type = type_check_identifier_is_not_function(lhs)
                     typed_left = old_type
             type_check_expression(rhs)
             new_rhs = _convert_to(rhs, typed_left)
@@ -1139,7 +1166,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             exp.root.rhs = new_rhs
             exp.type = typed_left
         case parser.Constant(ctype=trivial_type):
-            exp.type = parser.CType(root=trivial_type)
+            exp.type = trivial_type
         case parser.Cast(target_type=target_type, exp=inner):
             type_check_expression(inner)
             exp.type = target_type
@@ -1157,13 +1184,7 @@ def type_check_identifier_is_not_function(
     """
     name = ident.root
     old = SYMBOL_TABLE.get().data[name]
-    match old.type:
-        case parser.TrivialType():
-            return old.type
-        case parser.CType(root=parser.TrivialType()):
-            return old.type.root  # pyright: ignore[reportReturnType]
-        case _:
-            raise TypeError()
+    return parser.CType.assert_is_trivial(old.type)
 
 
 def type_check_statement(stmt: parser.Statement):
@@ -1209,11 +1230,11 @@ def type_check_statement(stmt: parser.Statement):
                 type_check_block_item(b)
         case parser.Switch(checker=checker, body=body):
             type_check_expression(checker)
-            assert checker.type and isinstance(checker.type.root, parser.TrivialType)
+            trivial_type = parser.CType.assert_is_trivial(checker.type)
 
             found_cases: dict[str, parser.SwitchCase] = {}
             with (
-                pf.set_context(TYPE_OF_SWITCH, checker.type.root),
+                pf.set_context(TYPE_OF_SWITCH, trivial_type),
                 pf.set_context(FOUND_CASES, found_cases),
             ):
                 type_check_statement(body)
@@ -1232,7 +1253,8 @@ def type_check_statement(stmt: parser.Statement):
                 case parser.SwitchCase.Case():
                     as_str = str(
                         type.check.get_const_expression(
-                            cast_to=cast_to.root, mutate=True
+                            cast_to=cast_to.root,  # pyright: ignore[reportArgumentType]
+                            mutate=True,
                         )
                     )
 
@@ -1262,14 +1284,12 @@ def _convert_to(exp: parser.Expression, type: parser.CType | None):
 
 def _get_common_type(left: parser.CType | None, right: parser.CType | None):
     assert left and right
-    match left.root, right.root:
-        case parser.TrivialType(root="int"), parser.TrivialType(root="long"):
+    match left, right:
+        case parser.CType(root="int"), parser.CType(root="long"):
             return right
-        case parser.TrivialType(root="long"), parser.TrivialType(root="int"):
+        case parser.CType(root="long"), parser.CType(root="int"):
             return left
-        case parser.TrivialType(root=left_r), parser.TrivialType(root=right_r) if (
-            left_r == right_r
-        ):
+        case parser.CType(root=left_r), parser.CType(root=right_r) if left_r == right_r:
             return left
         case _:
             raise ValueError(f"No common type for {left=} and {right=}")

@@ -52,13 +52,10 @@ For better error messages
 
 INDENT_LEVEL = ContextVar("INDENT_LEVEL", default=0)
 
-if which("bat"):
-    CAT_PROGRAM = "bat"
-elif which("batcat"):
-    CAT_PROGRAM = "batcat"  # pyright: ignore[reportConstantRedefinition]
-else:
-    CAT_PROGRAM = "cat"  # pyright: ignore[reportConstantRedefinition]
-
+CAT_PROGRAM = (which("bar") and "bat") or (which("batcat") and "batcat") or "cat"
+"""
+External "pretty" program to print to terminal
+"""
 
 Oldest_School_Registers = t.Literal[
     "A",  # A -> ACCUMULATOR (for return values)
@@ -115,10 +112,7 @@ class x64:
         8: "b",
     }
     from_op_size: t.Final[dict[Operation_Size, Bit_Size]] = {
-        "q": 64,
-        "l": 32,
-        "w": 16,
-        "b": 8,
+        val: key for key, val in from_bit_size.items()
     }
 
     from_arg_number: t.Final[dict[int, Register]] = {

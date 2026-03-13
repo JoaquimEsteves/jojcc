@@ -64,7 +64,7 @@ from contextlib import suppress
 
 import shared.data_types as dt
 import shared.pure_functions as pf
-from pydantic import BaseModel, Field, RootModel, model_validator
+from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validator
 
 from chapter11 import lexer
 
@@ -152,9 +152,9 @@ class Specifiers:
         if len(types) == 2:
             # shit! It's weird but it's OK to define a long as
             # int static long
-            as_set = {str(t.root.root) for t in types}  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
+            as_set = {str(t.root) for t in types}
             assert as_set == {"long", "int"}
-            types = [CType(root=TrivialType(root="long"))]
+            types = [CType(root="long")]
 
         assert len(storage_classes) <= 1, "BRO!"
 
@@ -309,7 +309,7 @@ class Variable_Declaration(BaseModel):
     <variable-declaration> ::= "int" <identifier> ["=" <exp>] ";"_
     """
 
-    type: CType
+    type: TrivialType
     name: Identifier
     init: Expression | None
     storage: Specifiers.Storage_Class | None
@@ -472,13 +472,7 @@ class For(Labelled_Construct):
         return Expression.from_tokens(tokens_sans_semicolon, assert_no_food_left=True)
 
 
-class TrivialType(BaseModel):
-    type SubType = t.Literal["int", "long"]
-    root: SubType
-
-    @staticmethod
-    def from_tokens(token: lexer.Token_Lexed):
-        return TrivialType(root=token[1])  # pyright: ignore[reportArgumentType]
+type Trivial_SubType = t.Literal["int", "long"]
 
 
 class CType(BaseModel):
@@ -486,24 +480,38 @@ class CType(BaseModel):
         return_type: CType
         params: list[CType]
 
-    root: TrivialType | FuncType
-
-    @staticmethod
-    def from_trivial(which: TrivialType.SubType):
-        return CType(root=TrivialType(root=which))
+    root: Trivial_SubType | FuncType
 
     @staticmethod
     def from_token(token: lexer.Token_Lexed):
-        # This is wrong. But whatever
-        return CType(root=TrivialType.from_tokens(token))
+        return CType(root=token[1])  # pyright: ignore[reportArgumentType]
+
+    @staticmethod
+    def from_trivial(which: Trivial_SubType):
+        return CType(root=which)
+
+    @staticmethod
+    def assert_is_trivial(ctype: t.Any) -> TrivialType:  # pyright: ignore[reportAny]
+        assert ctype.is_trivial()  # pyright: ignore[reportAny]
+        return ctype  # pyright: ignore[reportAny]
+
+    def is_trivial(self: CType):
+        return self.root in ("int", "long")
+
+    def get_trivial(self) -> Trivial_SubType:
+        _ = self.assert_is_trivial(self)
+        return self.root  # pyright: ignore[reportReturnType]
 
     @t.override
     def __str__(self):
         match self.root:
-            case TrivialType():
-                return str(self.root.root)
+            case "int" | "long":
+                return self.root
             case CType.FuncType():
                 return f"('return {self.root.return_type.root} '(params ({', '.join(str(p) for p in self.root.params)})))"
+
+
+type TrivialType = t.Annotated[CType, AfterValidator(CType.assert_is_trivial)]
 
 
 class ReturnStatement(BaseModel):
@@ -762,7 +770,7 @@ class Block(BaseModel):
 
 
 class Typed(BaseModel):
-    type: CType | None = None
+    type: CType | None
 
 
 class Expression(Typed):
@@ -802,7 +810,7 @@ class Expression(Typed):
         return False
 
     def get_const_expression(
-        self, *, cast_to: TrivialType.SubType | None, mutate: bool = False
+        self, *, cast_to: Trivial_SubType | None, mutate: bool = False
     ):
         """
         I don't like this little `mutate` thing...but the printer was outputting wrong values
@@ -821,7 +829,7 @@ class Expression(Typed):
                     if mutate and cast_to:
                         self.type = CType.from_trivial(cast_to)
                         self.root.type = CType.from_trivial(cast_to)
-                        res.ctype = TrivialType(root=cast_to)
+                        res.ctype = CType(root=cast_to)
 
                     return res
                 # In the future this step will be more involved
@@ -841,11 +849,20 @@ class Expression(Typed):
 
     @staticmethod
     def from_constant(const: int, ctype: TrivialType):
-        return Expression(root=Factor(root=Constant(root=const, ctype=ctype)))
+        return Expression(
+            root=Factor(
+                root=Constant(root=const, ctype=ctype),
+                type=ctype,
+            ),
+            type=ctype,
+        )
 
     @staticmethod
-    def read_var(name: str):
-        return Expression(root=Factor(root=Identifier(name)))
+    def read_var(name: str, type: CType | None):
+        """
+        In practise the CType should never be none
+        """
+        return Expression(root=Factor(root=Identifier(name), type=type), type=type)
 
     @t.override
     def __str__(self):
@@ -891,6 +908,7 @@ class Expression(Typed):
                     # shit, I hate these nerds
                     other_rest = rest
                     left = Factor(
+                        type=None,
                         root=Unary(
                             op=operator,
                             exp=left,  # pyright: ignore[reportArgumentType]
@@ -904,7 +922,7 @@ class Expression(Typed):
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
-                    identifier = Expression(root=left)
+                    identifier = Expression(root=left, type=None)
                     left = (
                         Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
                         if operator != "="
@@ -916,7 +934,9 @@ class Expression(Typed):
                     assert colon == ":", "BAD IF EXPRESSION"
                     right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
                     left = Conditional(
-                        left=Expression(root=left), middle=middle, right=right
+                        left=Expression(root=left, type=None),
+                        middle=middle,
+                        right=right,
                     )
 
                 else:
@@ -924,12 +944,12 @@ class Expression(Typed):
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
                     left = BinaryOp(
                         op=operator,  # pyright: ignore[reportArgumentType]
-                        lhs=Expression(root=left),
+                        lhs=Expression(root=left, type=None),
                         rhs=rhs,
                     )
                 right = other_rest
 
-            return Expression(root=left), right
+            return Expression(root=left, type=None), right
 
         exp, rest = inner(tokens, min_prec)
         if assert_no_food_left:
@@ -961,12 +981,16 @@ class Constant(BaseModel):
         # If `v` is bigger than we expect it's a long
         # But the user can also specify `1l` to force it to be a long
         if which_token == "LONG_CONSTANT" or v > 2**31 - 1:
-            return Constant(root=v, ctype=TrivialType(root="long"))
+            return Constant(root=v, ctype=CType(root="long"))
 
-        return Constant(root=v, ctype=TrivialType(root="int"))
+        return Constant(root=v, ctype=CType(root="int"))
 
     @staticmethod
-    def fit(val: int, target: TrivialType.SubType):
+    def from_bool(bool: t.Literal[0, 1]):
+        return Constant(root=int(bool), ctype=CType(root="int"))
+
+    @staticmethod
+    def fit(val: int, target: Trivial_SubType):
         """
         Given some infinite int - make it fit an int/long/etc
         """
@@ -1013,7 +1037,7 @@ class Factor(Typed):
                 if not rest or rest[0][0] != "OPEN_PARENS":
                     # It's just an identifier
                     return (
-                        Factor(root=ident),
+                        Factor(root=ident, type=None),
                         rest,
                     )
 
@@ -1022,7 +1046,7 @@ class Factor(Typed):
                 arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
 
                 return (
-                    Factor(root=Func_Call(name=ident, args=arg_list)),
+                    Factor(root=Func_Call(name=ident, args=arg_list), type=None),
                     rest[corresponding_closed + 1 :],
                 )
             case "CONSTANT" | "LONG_CONSTANT":
@@ -1031,6 +1055,7 @@ class Factor(Typed):
                         root=Constant.from_token(
                             (token, identifier, charno),  # pyright: ignore[reportArgumentType]
                         ),
+                        type=None,
                     ),
                     rest,
                 )
@@ -1038,13 +1063,14 @@ class Factor(Typed):
                 if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
                     # shoot, it's a cast!
                     cast, rest = Cast.from_tokens(rest)
-                    return Factor(root=cast), rest
+                    return Factor(root=cast, type=None), rest
                 corresponding_closed = get_closing(rest, ")")
                 return (
                     Factor(
                         root=Expression.from_tokens(
                             rest[:corresponding_closed], assert_no_food_left=True
-                        )
+                        ),
+                        type=None,
                     ),
                     rest[corresponding_closed + 1 :],
                 )
@@ -1053,6 +1079,7 @@ class Factor(Typed):
                 exp, rest = Factor.parse(rest)
                 return (
                     Factor(
+                        type=None,
                         root=Unary(op=token, exp=exp),
                     ),
                     rest,
@@ -1285,13 +1312,14 @@ class Fancy_Assignment(BaseModel):
         lhs = self.lhs
         type = self.type
 
-        def get_bin_op(type: Binary_Op_Without_Assignment):
+        def get_bin_op(op: Binary_Op_Without_Assignment):
             return Expression(
+                type=None,
                 root=BinaryOp(
-                    op=type,
-                    lhs=Expression(root=Factor(root=lhs)),
+                    op=op,
+                    lhs=Expression(root=Factor(root=lhs, type=None), type=None),
                     rhs=rhs,
-                )
+                ),
             )
 
         match type:

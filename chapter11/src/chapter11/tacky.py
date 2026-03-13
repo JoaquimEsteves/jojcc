@@ -2,57 +2,24 @@
 underscore denotes new shit
 
 ```
-program = Program(function_definition)
-function_definition = Function(identifier, instruction* body)
+program = Program(top_level*)
+top_level = Function(identifier, bool global, identifier* params, instruction* body)
+          | StaticVariable(identifier, bool global, _type t, static_init init_)
 instruction = Return(val)
+            | _SignExtend(val src, val dst)_
+            | _Truncate(val src, val dst)_
             | Unary(unary_operator, val src, val dst)
             | Binary(binary_operator, val src1, val src2, val dst)
-            | _Copy(val src, val dst)_
-            | _Jump(identifier target)_
-            | _JumpIfZero(val condition, identifier target)_
-            | _JumpIfNotZero(val condition, identifier target)_
-            | _Label(identifier)_
-val = Constant(int) | Var(identifier)
-unary_operator = Complement | Negate | _Not_
-binary_operator = Add | Subtract | Multiply | Divide | Remainder | _Equal_ | _NotEqual_
-                | _LessThan_ | _LessOrEqual_ | _GreaterThan_ | _GreaterOrEqual_
-```
-
-Tacky for if statements
-
-```
-<instructions for condition>
-c = <result of condition>
-JumpIfZero(c, end)
-<instructions for statement>
-Label(end)
-```
-
-For if-else
-
-```
-<instructions for condition>
-c = <result of condition>
-JumpIfZero(c, else_label)
-<instructions for statement1>
-Jump(end)
-Label(else_label)
-<instructions for statement2>
-Label(end)
-```
-
-The `AND` and the `OR` however require something like the following tacky:
-
-```
-v1 = <result of e1>
-JumpIfZero(v1, 'false_label)
-v2 = <result of e2>
-JumpIfZero(v2, 'false_label)
-result = 1
-Jump(end)
-Label('false_label)
-result = 0
-Label(end)
+            | Copy(val src, val dst)
+            | Jump(identifier target)
+            | JumpIfZero(val condition, identifier target)
+            | JumpIfNotZero(val condition, identifier target)
+            | Label(identifier)
+            | FunCall(identifier fun_name, val* args, val dst)
+val = Constant(const) | Var(identifier)
+unary_operator = Complement | Negate | Not
+binary_operator = Add | Subtract | Multiply | Divide | Remainder | Equal | NotEqual
+                | LessThan | LessOrEqual | GreaterThan | GreaterOrEqual
 ```
 """
 
@@ -106,9 +73,14 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
         ):
             checker_res = emit_exp(checker, instructions)
             if isinstance(checker_res, Var):
-                checker_expr = parser.Expression.read_var(checker_res.name)
+                checker_expr = parser.Expression.read_var(
+                    checker_res.name, type=checker.type
+                )
             else:
-                checker_expr = parser.Expression(root=parser.Factor(root=checker_res))
+                checker_expr = parser.Expression(
+                    root=parser.Factor(root=checker_res, type=checker.type),
+                    type=checker.type,
+                )
 
             end_of_switch_label = Label.from_break(control_label)
             # By default we jump to where a `break` would jump to if none of our
@@ -125,9 +97,10 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 goto = parser.Statement(root=parser.Goto(label=case.label))
                 _ = do_an_if(
                     parser.Expression(
+                        type=parser.CType(root="int"),
                         root=parser.BinaryOp(
                             op="==", lhs=checker_expr, rhs=case.type.check
-                        )
+                        ),
                     ),
                     goto,
                     instructions,
@@ -196,7 +169,7 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                     JumpIfZero(condition=condition_result, target=break_label)
                 )
             # From the book:
-            # If it [condition] is absent, the C standard says that this
+            # If it [the condition] is absent, the C standard says that this
             # expression is “replaced by a nonzero constant” (section 6.8.5.3,
             # paragraph 2)
             # But the book also says that we can ignore that shit
@@ -257,11 +230,23 @@ def emit_exp(
     match exp.root:
         case parser.Func_Call():
             return emit_func_call(exp.root, instructions)
+        case parser.Cast(target_type=target_type, exp=inner):
+            res = emit_exp(inner, instructions)
+            if target_type == inner.type:
+                return res
+            destination = Var.new(type=inner.type)
+            inst: Instruction
+            if target_type.root == parser.CType(root="long"):
+                inst = SignExtend(src=res, dest=destination)
+            else:
+                inst = Truncate(src=res, dest=destination)
+            instructions.append(inst)
+            return destination
         case parser.Factor() | parser.Expression():
             return emit_exp(exp.root, instructions)
 
         case parser.Identifier(root=name):
-            return Var(name=name)
+            return Var.new(type=exp.type, name=name)
         case parser.Constant():
             return exp.root
         case parser.Unary():
@@ -282,14 +267,16 @@ def emit_exp(
                 case (
                     parser.Identifier(root=name)
                     | parser.Expression(
-                        type=parser.Factor(type=parser.Identifier(root=name))
+                        root=parser.Factor(root=parser.Identifier(root=name))
                     )
                 ):
-                    return emit_copy_exp(Var(name=name), rhs, instructions)
+                    return emit_copy_exp(
+                        Var.new(type=exp.type, name=name), rhs, instructions
+                    )
                 case _:
                     raise ValueError("NOPE! Bad assignment")
         case parser.BinaryOp():
-            return _emit_binop(exp.root, instructions)
+            return _emit_binop(exp.root, exp.type, instructions)
 
 
 def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Value:
@@ -298,13 +285,20 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     Mostly because of those darned `++` and `--` operators!
     The devil himself came up with them.
     """
-    operation, factor, pre = unary_op.op, unary_op.exp, unary_op.pre
+    operation, factor, pre, type = (
+        unary_op.op,
+        unary_op.exp,
+        unary_op.pre,
+        unary_op.exp.type,
+    )
     destination: Value
 
     source = emit_exp(factor, instructions)
 
+    type = parser.CType.assert_is_trivial(type)
+
     if operation not in ("++", "--"):
-        destination = Var(name=_make_temp())
+        destination = Var.new(type=type)
         instructions.append(
             Unary(
                 operation=operation,
@@ -335,37 +329,48 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
 
     # Note - at this stage this factor _MUST_ be an lvalue
     # Semantic analysis handles that for us
-    lhs = parser.Expression(root=factor)
-    rhs = parser.Expression(root=parser.Factor(root=parser.Constant(root=1)))
+    lhs = parser.Expression(root=factor, type=type)
+    rhs = parser.Expression(
+        root=parser.Factor(root=parser.Constant(root=1, ctype=type), type=type),
+        type=type,
+    )
     intermediate_exp = parser.Expression(
+        type=type,
         root=parser.BinaryOp(
             op="PLUS" if operation == "++" else "MINUS",
             lhs=lhs,
             rhs=rhs,
-        )
+        ),
     )
 
     if pre:
-        return emit_copy_exp(Var(name=current.root), intermediate_exp, instructions)
+        return emit_copy_exp(
+            Var.new(type=type, name=current.root), intermediate_exp, instructions
+        )
 
-    destination = Var(name=_make_temp())
+    destination = Var.new(type=type)
     instructions.append(Copy(src=source, dest=destination))
-    _ = emit_copy_exp(Var(name=current.root), intermediate_exp, instructions)
+    _ = emit_copy_exp(
+        Var.new(type=type, name=current.root), intermediate_exp, instructions
+    )
     return destination
 
 
-def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
+def _emit_binop(
+    op: parser.BinaryOp, type: parser.CType | None, instructions: list[Instruction]
+):
     bin_op, lhs, rhs = op.op, op.lhs, op.rhs
+    type = parser.CType.assert_is_trivial(type)
     match bin_op:
         case "AND":
             end = _make_label("and_end")
-            dst = Var(name=_make_temp("result_and"))
-            tmp = Var(name=_make_temp("tmp"))
+            dst = Var.new(type=type, name=_make_temp("result_and"))
+            tmp = Var.new(type=type, name=_make_temp("tmp"))
 
             # DON'T use `extend` for the whole thing!
             # The instructions will be appendded out of order!
             # As the inner `emit_tacky` will "win"
-            instructions.append(Copy(src=parser.Constant(root=0), dest=dst))
+            instructions.append(Copy(src=parser.Constant.from_bool(0), dest=dst))
             res_lhs = emit_exp(lhs, instructions)
             instructions.extend(
                 (
@@ -378,7 +383,7 @@ def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
                 (
                     Copy(src=res_rhs, dest=tmp),
                     JumpIfZero(condition=tmp, target=end),
-                    Copy(src=parser.Constant(root=1), dest=dst),
+                    Copy(src=parser.Constant.from_bool(1), dest=dst),
                     Label(identifier=end),
                 ),
             )
@@ -388,7 +393,7 @@ def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
             dst = Var(name=_make_temp("result_or"))
             tmp = Var(name=_make_temp("tmp"))
 
-            instructions.append(Copy(src=parser.Constant(root=1), dest=dst))
+            instructions.append(Copy(src=parser.Constant.from_bool(1), dest=dst))
             res_lhs = emit_exp(lhs, instructions)
             instructions.extend(
                 (
@@ -404,7 +409,7 @@ def _emit_binop(op: parser.BinaryOp, instructions: list[Instruction]):
                 (
                     Copy(src=res_rhs, dest=tmp),
                     JumpIfNotZero(condition=tmp, target=end),
-                    Copy(src=parser.Constant(root=0), dest=dst),
+                    Copy(src=parser.Constant.from_bool(0), dest=dst),
                     Label(identifier=end),
                 )
             )
@@ -567,7 +572,8 @@ class Program(BaseModel):
 class Static_Variable(BaseModel):
     name: Valid_Identifier
     is_global: bool
-    init: int
+    init: semantic_analysis.Symbol_Table.Static.StaticInit
+    type: parser.TrivialType
 
     @staticmethod
     def from_symbol(name: str, symbol: semantic_analysis.Symbol_Table.Symbol):
@@ -575,13 +581,19 @@ class Static_Variable(BaseModel):
             # Don't care
             return None
 
-        res = Static_Variable(name=name, is_global=symbol.is_global, init=0)
+        res = Static_Variable(
+            name=name,
+            is_global=symbol.is_global,
+            type=symbol.type,
+            init=semantic_analysis.Symbol_Table.Static.StaticInit(val=0),
+        )
 
         match symbol.initial_value:
             case "tentative":
+                # Initialized to zero
                 return res
-            case int():
-                res.init = symbol.initial_value
+            case semantic_analysis.Symbol_Table.Static.StaticInit(val=val):
+                res.init.val = val
                 return res
             case "Nope!":
                 # The linker will yell at us later if it's not found
@@ -589,9 +601,7 @@ class Static_Variable(BaseModel):
 
     @t.override
     def __str__(self):
-        return (
-            f"(let{'-global' if self.is_global else ''} (= `{self.name}` {self.init}))"
-        )
+        return f"(let{'-global' if self.is_global else ''} (= `{self.name}:{self.type}` {self.init}))"
 
 
 class Function_Definition(BaseModel):
@@ -612,10 +622,14 @@ class Function_Definition(BaseModel):
         symbol_table = semantic_analysis.SYMBOL_TABLE.get()
         symbol = symbol_table.data[ast.name.root]
         assert isinstance(symbol, semantic_analysis.Symbol_Table.Func), "Compiler bug!"
+        params = [
+            (Var(name=id.root), type)
+            for (id, type) in zip(ast.param_list, ast.type.params, strict=True)
+        ]
         return Function_Definition(
-            params=[(Var(name=var.name.root), var.type) for var in ast.param_list],
+            params=params,
             name=ast.name.root,
-            return_type=ast.return_type,
+            return_type=ast.type.return_type,
             instructions=body,
             is_global=symbol.is_global,
         )
@@ -658,6 +672,8 @@ type Instruction = (
     | JumpIfNotZero
     | Label
     | Func_Call
+    | SignExtend
+    | Truncate
 )
 type Value = parser.Constant | Var
 
@@ -672,6 +688,22 @@ class Return(BaseModel):
 
 class Var(BaseModel):
     name: str
+
+    @staticmethod
+    def new(type: parser.CType | None, name: str | None = None):
+        type = parser.CType.assert_is_trivial(type)
+        if name is None:
+            name = _make_temp()
+        res = Var(name=name)
+        if (
+            res.is_static()
+        ):  # Note: That this will never be true if we give it a "correct" name!
+            assert semantic_analysis.SYMBOL_TABLE.get().data[name].type == type
+            return res
+        semantic_analysis.SYMBOL_TABLE.get().data[name] = (
+            semantic_analysis.Symbol_Table.Local(type=type)
+        )
+        return res
 
     def is_static(self):
         symbol_table = semantic_analysis.SYMBOL_TABLE.get()
@@ -709,16 +741,7 @@ class BinaryOp(BaseModel):
 
     @t.override
     def __str__(self):
-        return f"({self.operation} {self.src1!s} {self.src2!s})\n(copy {self.dest!s})"
-
-
-class Copy(BaseModel):
-    src: Value
-    dest: Value
-
-    @t.override
-    def __str__(self):
-        return f"(copy {self.src!s} {self.dest!s})"
+        return f"(copy ({self.operation} {self.src1!s} {self.src2!s}) {self.dest!s})"
 
 
 class Jump(BaseModel):
@@ -778,3 +801,26 @@ class Label(BaseModel):
     @t.override
     def __str__(self):
         return f"(label: {self.identifier})"
+
+
+class SrcDest(BaseModel):
+    src: Value
+    dest: Value
+
+
+class SignExtend(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(sign-extend {self.src!s} {self.dest!s})"
+
+
+class Truncate(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(truncate {self.src!s} {self.dest!s})"
+
+
+class Copy(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(copy {self.src!s} {self.dest!s})"

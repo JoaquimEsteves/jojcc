@@ -9,9 +9,11 @@ def lex(input: str):
     lexed: Lexed = []
     charno = 0
     """
-    Just realised that this whole charno is really wrong.
-    Forgot about the fact that I do an `lstrip`.
-    Whatever.
+    The charno is STILL wrong.
+    I tweaked it, but the problem is that we get a pre-processed C-file.
+    So comments/includes/macros go out of the window.
+
+    ...dammit
     """
 
     def inner(current: str, charno: dt.CharNo):
@@ -19,17 +21,18 @@ def lex(input: str):
             match = regex.match(current)
             if match is None:
                 continue
-            lexed.append(
-                # if DEBUG add the `rest`
-                (token, current[slice(*match.span())], charno),
-            )
+            found = current[slice(*match.span())]
+            if whitespace := WHITESPACE.match(found):
+                # We have to remove the whitespace from the charno
+                tweaked_charno = charno + whitespace.end()
+                found = found.lstrip()
+            else:
+                tweaked_charno = charno
+            lexed.append((token, found, tweaked_charno))
             return current[match.end() :], charno + match.end()
         raise ValueError("Syntax Error")
 
-    while input != "":
-        if WHITESPACE.match(input):
-            input = input.lstrip()
-            continue
+    while not WHITESPACE.fullmatch(input):
         input, charno = inner(input, charno)
 
     return lexed
@@ -38,7 +41,7 @@ def lex(input: str):
 type Token_Lexed = tuple[Token, str, dt.CharNo]
 type Lexed = list[Token_Lexed]
 
-WHITESPACE = re.compile(r"\s")
+WHITESPACE = re.compile(r"\s*")
 
 type Token = t.Literal[
     "DO_KEYWORD",
@@ -122,7 +125,7 @@ ASSIGNMENT_OPS = tuple(
 TOKEN_REGEX = t.cast(
     dict[Token, re.Pattern[str]],
     {
-        key: re.compile(val)  # re.compile supposedly makes stuff faster
+        key: re.compile(rf"\s*{val}")  # re.compile supposedly makes stuff faster
         for key, val in (
             {
                 # Note: The book says that we should treat `keywords` as identifiers I'm
