@@ -182,7 +182,6 @@ class Symbol_Table(BaseModel):
                 return is_global
             case Symbol_Table.Local():
                 return False
-        return self.data.get(name)
 
     def assert_declaration_has_type_match(self, decl: parser.Variable_Declaration):
         old = self.data.get(decl.name.root)
@@ -981,7 +980,7 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
             if decl.name not in symbol_table:
                 symbol_table.data[decl.name.root] = Symbol_Table.Static(
                     initial_value="Nope!",
-                    type=decl.type.root,  # pyright: ignore[reportArgumentType]
+                    type=decl.type,
                     is_global=True,
                 )
 
@@ -994,7 +993,7 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
 
             symbol_table.data[decl.name.root] = Symbol_Table.Static(
                 initial_value=initial_value,
-                type=decl.type.root,  # pyright: ignore[reportArgumentType]
+                type=decl.type,
                 is_global=False,
             )
 
@@ -1093,7 +1092,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             for param, current_arg in zip(old.type.params, args, strict=True):
                 type_check_expression(current_arg)
                 if param != current_arg.type:
-                    current_arg = _convert_to(current_arg, current_arg.type)
+                    current_arg = _convert_to(current_arg, param)
                 new_args.append(current_arg)
             exp.type = old.type.return_type
             exp.root.args = new_args
@@ -1148,6 +1147,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
                 type_check_expression(sub)
             assert middle.type and right.type, "Dude - where my types at?"
             exp.type = _get_common_type(middle.type, right.type)
+
         case (
             parser.Fancy_Assignment(lhs=lhs, rhs=rhs)
             | parser.Normal_Assignment(lhs=lhs, rhs=rhs)

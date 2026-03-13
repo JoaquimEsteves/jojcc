@@ -34,7 +34,7 @@ We can do the whole thing with just `rbp`
 """
 
 DEBUG = ContextVar(
-    "DEBUG", default=os.environ.get("DEBUG", "false").lower in ("true", "t")
+    "DEBUG", default=os.environ.get("DEBUG", "false").lower() in ("true", "t")
 )
 COMPILER = ContextVar("Compiler", default=os.environ.get("COMPILER", "gcc"))
 """
@@ -123,8 +123,21 @@ class x64:
         4: "R8",
         5: "R9",
     }
+    """
+    SYSTEM V Call Convention
+    Arg 1 goes into DI, Arg 2 into SI, etc
+
+    Does it make _ANY_ sense to the reader? 'cos it FOR SURE doesn't for me.
+    OK so `A` is the accumulator sure, but then why do we skip right to DI only to come _back_ to D and C?
+    And then we say "fuck it" and jump right into the R8 and R9 register...
+    """
 
     NUMBER_OF_REGISTER_ARGUMENTS = len(from_arg_number)
     """
     6
     """
+
+    max: t.Final[dict[Bit_Size, int]] = {
+        size: 2 ** (size - 1) - 1 for size in from_bit_size
+    }
+    umax: t.Final[dict[Bit_Size, int]] = {size: 2**size for size in from_bit_size}

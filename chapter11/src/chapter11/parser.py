@@ -502,6 +502,15 @@ class CType(BaseModel):
         _ = self.assert_is_trivial(self)
         return self.root  # pyright: ignore[reportReturnType]
 
+    def get_size(self) -> dt.x64.Bit_Size:
+        match self.root:
+            case "int":
+                return 32
+            case "long":
+                return 64
+            case _:
+                raise ValueError("WE DON'T DO FUNCTION POINTERS YET")
+
     @t.override
     def __str__(self):
         match self.root:
@@ -994,17 +1003,20 @@ class Constant(BaseModel):
         """
         Given some infinite int - make it fit an int/long/etc
         """
-        if val > 2**63 - 1:
+        if val > dt.x64.max[64]:
             raise ValueError("{v=} can not be represented as int or long!")
 
+        max_int = dt.x64.max[32]
+        max_uint = dt.x64.umax[32]
         match target:
             case "long":
                 return val
-            case "int" if val > 2**31 - 1:
+            case "int" if val > max_int:
                 # We follow the rules as defined in GCC
                 # This effectively `cuts` the first 4 bytes
-                while val > 2**31 - 1:
-                    val = val - 2**32  # pyright: ignore[reportAny]
+                # (This `while` thing looks jank i gotta say)
+                while val > max_int:
+                    val = val - max_uint
                 return val
             case "int":
                 return val
@@ -1015,6 +1027,9 @@ class Factor(Typed):
     The name `factor` comes from the fact that this symbol can appear as a
     _factor_ in a multiplication expression.
 
+    TODO(Joaquim): Get _rid_ of this class.
+
+    Instead there would be two functions for parsing expressions.
     """
 
     type SubType = Constant | Unary | Expression | Identifier | Func_Call | Cast
@@ -1122,7 +1137,9 @@ class Cast(BaseModel):
         (ctype, specifier), nada = Specifiers.from_tokens(tokens[:corresponding_closed])
         assert specifier is None and nada == [], "Failed to parse type of cast!"
 
-        exp, rest = Expression.from_tokens(tokens[corresponding_closed + 1 :])
+        exp, rest = Expression.from_tokens(
+            tokens[corresponding_closed + 1 :], min_prec=operator_precedence("CAST")
+        )
 
         return Cast(target_type=ctype, exp=exp), rest
 
@@ -1194,7 +1211,7 @@ actually `? foo :`
 """
 
 
-def _binary_op_precedence(op: Binary_Op_Or_Extras):
+def operator_precedence(op: Binary_Op_Or_Extras | t.Literal["CAST"]):
     """
     The reference is:
     https://en.cppreference.com/w/c/language/operator_precedence.html
@@ -1209,6 +1226,11 @@ def _binary_op_precedence(op: Binary_Op_Or_Extras):
     match op:
         case "++" | "--":
             return 100 - 1
+        # Prevents cases like (long) 2 == 3
+        # Note that `cast` is not a TOKEN, it has to be manually inserted here
+        # Quite annoying, but what can ya do
+        case "CAST":
+            return 100 - 2
         case "ASTERISK" | "FORWARD_SLASH" | "PERCENT":
             return 100 - 3
         case "MINUS" | "PLUS":
@@ -1238,7 +1260,7 @@ def _binary_op_precedence(op: Binary_Op_Or_Extras):
 
 
 BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_Extras, int] = {
-    op: _binary_op_precedence(op)
+    op: operator_precedence(op)
     for op in t.cast(
         frozenset[Binary_Op_Or_Extras], pf.get_literal_vals(Binary_Op_Or_Extras)
     )

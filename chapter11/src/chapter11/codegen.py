@@ -1,25 +1,38 @@
 """
+TODO(Joaquim):
+
+- Replace the `new` methods That kind of stuff should be done on the
+  `to_assembly` pass!
+- Consider one _FAT_ function. The huge match-case on the `parser/tacky` files
+  appears to lead to less bugs. Even if it's "uglier"
+
+
 New shit in underscore
 ```
-program = Program(function_definition)
-function_definition = Function(identifier name, instruction* instructions)
-instruction = Mov(operand src, operand dst)
-            | Unary(unary_operator, operand)
-            | Binary(binary_operator, operand, operand)
-            | _Cmp(operand, operand)_
-            | Idiv(operand)
-            | Cdq
-            | _Jmp(identifier)_
-            | _JmpCC(cond_code, identifier)_
-            | _SetCC(cond_code, operand)_
-            | _Label(identifier)_
-            | AllocateStack(int)
+program = Program(top_level*)
+_assembly_type = Longword | Quadword_
+top_level = Function(identifier name, bool global, instruction* instructions)
+          | StaticVariable(identifier name, bool global, _int alignment, static_init init_)
+instruction = Mov(_assembly_type_, operand src, operand dst)
+            | _Movsx(operand src, operand dst)_
+            | Unary(unary_operator, _assembly_type_, operand)
+            | Binary(binary_operator, _assembly_type_, operand, operand)
+            | Cmp(_assembly_type_, operand, operand)
+            | Idiv(_assembly_type_, operand)
+            | Cdq(_assembly_type_)
+            | Jmp(identifier)
+            | JmpCC(cond_code, identifier)
+            | SetCC(cond_code, operand)
+            | Label(identifier)
+            | Push(operand)
+            | Call(identifier)
             | Ret
+
 unary_operator = Neg | Not
 binary_operator = Add | Sub | Mult
-operand = Imm(int) | Reg(reg) | Pseudo(identifier) | Stack(int)
-cond_code = _E_ | _NE_ | _G_ | _GE_ | _L_ | _LE_
-reg = AX | DX | R10 | R11
+operand = Imm(int) | Reg(reg) | Pseudo(identifier) | Stack(int) | Data(identifier)
+cond_code = E | NE | G | GE | L | LE
+reg = AX | CX | DX | DI | SI | R8 | R9 | R10 | R11 | _SP_
 ```
 """
 
@@ -31,8 +44,64 @@ from pydantic import BaseModel, RootModel, model_validator
 
 from chapter11 import parser
 from chapter11 import tacky
-from chapter11.semantic_analysis import SYMBOL_TABLE
+from chapter11.semantic_analysis import SYMBOL_TABLE, Symbol_Table
 from shared import data_types as dt, pure_functions as pf
+
+
+class BST:
+    """
+    BST -> Backend-Symbol-Table
+
+    **THE BOOK** mentions how the assembly needs a different symbol-table.
+    IMO...it was fine to use the old one
+    But I suppose the book wants it this way for future chapters
+    """
+
+    data: t.ClassVar[dict[str, Symbol]] = {}
+
+    type Symbol = AssObject | Func
+
+    class AssObject(BaseModel):
+        size: dt.x64.Bit_Size
+        is_static: bool
+        is_external: bool
+
+    class Func(BaseModel):
+        defined: bool
+        is_external: bool
+
+    @classmethod
+    def init(cls):
+        symbol_table = SYMBOL_TABLE.get()
+        for name, symbol in symbol_table.data.items():
+            is_external = symbol_table.is_external(name)
+            match symbol:
+                case Symbol_Table.Func(defined=defined):
+                    cls.data[name] = cls.Func(defined=defined, is_external=is_external)
+                case Symbol_Table.Static(type=type):
+                    cls.data[name] = cls.AssObject(
+                        size=type.get_size(), is_static=True, is_external=is_external
+                    )
+                case Symbol_Table.Local(type=type):
+                    cls.data[name] = cls.AssObject(
+                        size=type.get_size(), is_static=False, is_external=is_external
+                    )
+
+    @classmethod
+    def get_size(cls, val: tacky.Value | str) -> dt.x64.Bit_Size:
+        match val:
+            case parser.Constant(ctype=ctype):
+                return ctype.get_size()
+            case tacky.Var(name=name) | str(name):
+                # Will crash if it's a function
+                # That's fine
+                return cls.data[name].size  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+
+    @classmethod
+    def is_static(cls, name: str) -> bool:
+        # Will crash if it's a function
+        # That's fine
+        return cls.data[name].is_static  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
 
 
 def parsed_to_assembly_construct(prog: tacky.Program):
@@ -49,9 +118,9 @@ def to_assembly(filename: Path, prog: Program) -> Ass:
 
 
 type Instruction = (
-    Mov
+    Comment
+    | Mov
     | Unary
-    | AllocateStack
     | Return
     | Idiv
     | Cdq
@@ -63,7 +132,7 @@ type Instruction = (
     | Label
     | Push
     | Call
-    | DeAllocateStack
+    | Movsx
 )
 type Cond_Code = t.Literal["e", "ne", "g", "ge", "l", "le"]
 
@@ -86,15 +155,16 @@ def map_relational_to_cond_code(code: parser.Relational_Binary) -> Cond_Code:
 
 class Program(BaseModel):
     functions: list[Function]
-    static_vars: list[tacky.Static_Variable]
+    static_vars: list[Static_Variable]
 
     @staticmethod
     def from_tacky(prog: tacky.Program):
+        BST.init()
         return Program(
             functions=[
                 Function.from_tacky(function_def) for function_def in prog.function_defs
             ],
-            static_vars=prog.static_vars,
+            static_vars=[Static_Variable.from_tacky(t) for t in prog.static_vars],
         )
 
     def to_assembly(self) -> list[str]:
@@ -108,7 +178,28 @@ class Program(BaseModel):
         return "\n".join(map(str, self.static_vars + self.functions))
 
 
+class Static_Variable(tacky.Static_Variable):
+    alignment: int
+
+    @staticmethod
+    def from_tacky(tacky: tacky.Static_Variable):
+        return Static_Variable(
+            name=tacky.name,
+            is_global=tacky.is_global,
+            init=tacky.init,
+            type=tacky.type,
+            alignment=(4 if tacky.type.root == "int" else 8),
+        )
+
+
 type Get_Val = "t.Callable[[tacky.Value | Pseudo], Operand]"
+
+
+class Sized(BaseModel):
+    size: dt.x64.Bit_Size
+
+    def assembly_type(self):
+        return dt.x64.from_bit_size[self.size]
 
 
 class Function(BaseModel):
@@ -134,53 +225,94 @@ class Function(BaseModel):
 
     @staticmethod
     def from_tacky(func: tacky.Function_Definition):
-        stack_allocation = AllocateStack()
-        instructions: list[Instruction] = [stack_allocation]
+        stack_allocation = allocate_stack(0)
 
+        if t.TYPE_CHECKING:
+            assert isinstance(stack_allocation.src, Imm)
+
+        include_comments = dt.DEBUG.get()
         stack_pointer = 0
         stack: dict[str, int] = {}
+
+        instructions: list[Instruction] = (
+            [Comment(root=stack), stack_allocation]
+            if include_comments
+            else [stack_allocation]
+        )
 
         def get_stack(name: str):
             nonlocal stack_pointer
             if name in stack:
                 return stack[name]
-            # bump the stack!
-            stack_pointer -= 4
+            size = BST.get_size(name)
+
+            if size == 32:
+                # bump the stack!
+                stack_pointer -= 4
+            else:
+                stack_pointer -= 8
+                # Alignment - get close to the nearest 64 bits
+                stack_pointer -= stack_pointer % 8
             stack[name] = stack_pointer
             return stack_pointer
+
+        # def pseudo_to_operand(pseudo: Pseudo):
+        #     return Stack(root=get_stack(pseudo.root))  # noqa: ERA001
 
         def get_val(value: tacky.Value | Pseudo):
             match value:
                 case parser.Constant(root=val):
                     return Imm(root=val)
                 case tacky.Var(name=name):
-                    if value.is_static():
+                    if BST.is_static(name):
                         return Data(root=name)
-
+                    # return Pseudo(root=name, to_operand=pseudo_to_operand)  # noqa: ERA001
                     return Stack(root=get_stack(name))
                 case Pseudo(root=name):
+                    # return Pseudo(root=name, to_operand=pseudo_to_operand)  # noqa: ERA001
                     return Stack(root=get_stack(name))
 
         for index in reversed(range(len(func.params))):
-            arg_source = _get_system_v_call_convention(index)
             param_name = func.params[index][0].name
+            arg_size = func.params[index][1].get_size()
+            arg_source = _get_system_v_call_convention(index, arg_size)
             if isinstance(arg_source, Stack):
                 stack[param_name] = arg_source.root
             else:
-                instructions.append(
-                    Mov(
+                instructions.extend(
+                    Mov.new(
+                        size=arg_size,
                         src=arg_source,
                         dest=get_val(Pseudo(root=func.params[index][0].name)),
+                        # dest=Pseudo(root=func.params[index][0].name, to_operand=pseudo_to_operand),  # noqa: ERA001
                     )
                 )
 
         for inst in func.instructions:
+            if include_comments:
+                instructions.append(Comment(root=str(inst)))
             match inst:
+                case tacky.Truncate(src=src, dest=dest):
+                    instructions.extend(
+                        Mov.new(
+                            size=32,
+                            src=get_val(src),
+                            dest=get_val(dest),
+                        )
+                    )
+                case tacky.SignExtend(src=src, dest=dest):
+                    instructions.extend(Movsx.new(src=get_val(src), dest=get_val(dest)))
                 case tacky.Func_Call():
                     instructions.extend(Call.from_ast(inst, get_val))
                 case tacky.Return(root=value):
                     src = get_val(value) if value else Imm(root=0)
-                    instructions.extend([Mov(src=src, dest=Reg(root="A")), Return()])
+                    size = BST.get_size(value) if value else 32
+                    instructions.extend(
+                        [
+                            *Mov.new(size=size, src=src, dest=Reg(root="A", size=size)),
+                            Return(),
+                        ]
+                    )
 
                 case tacky.Unary():
                     instructions.extend(Unary.from_tacky(inst, get_val))
@@ -189,22 +321,30 @@ class Function(BaseModel):
                     instructions.extend(Binary.from_tacky(inst, get_val))
 
                 case tacky.Copy(src=src, dest=dest):
-                    instructions.extend(Mov.new(get_val(src), get_val(dest)))
+                    instructions.extend(
+                        Mov.new(
+                            BST.get_size(src),
+                            get_val(src),
+                            get_val(dest),
+                        )
+                    )
 
                 case tacky.JumpIfZero(target=target, condition=condition):
                     label = target if isinstance(target, str) else target.identifier
+                    size = BST.get_size(condition)
                     instructions.extend(
                         (
-                            Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
+                            Cmp(size=size, lhs=Imm(root=0), rhs=get_val(condition)),
                             JmpCC(cond="e", label=label),
                         )
                     )
                 case tacky.JumpIfNotZero(target=target, condition=condition):
                     label = target if isinstance(target, str) else target.identifier
+                    size = BST.get_size(condition)
 
                     instructions.extend(
                         (
-                            Cmp(lhs=Imm(root=0), rhs=get_val(condition)),
+                            Cmp(size=size, lhs=Imm(root=0), rhs=get_val(condition)),
                             JmpCC(cond="ne", label=label),
                         )
                     )
@@ -216,9 +356,9 @@ class Function(BaseModel):
                 case tacky.Label(identifier=identifier):
                     instructions.append(Label(root=identifier))
 
-        # TODO: A PASS HERE THAT CONVERTS FROM PSEUDO TO REGISTERS/STACK
-
-        stack_allocation.root = stack_pointer - (stack_pointer % 16)
+        # Finally - we adjust the original instruction to align everything to 16-bytes
+        # AND TO MAKE IT POSITIVE
+        stack_allocation.src.root = abs(stack_pointer - (stack_pointer % 16))
         return Function(
             name=func.name, instructions=instructions, is_global=func.is_global
         )
@@ -237,28 +377,98 @@ class Function(BaseModel):
                 "\tmovq %rsp, %rbp",
             )
         )
-        res.extend(
-            f"\t{'\n\t'.join(i.to_assembly().split('\n'))}" for i in self.instructions
-        )
+
+        if dt.DEBUG.get():
+            for i in self.instructions:
+                temp = []
+                if not isinstance(i, Comment):
+                    temp = [f"# {i!r}"]
+                temp.extend(i.to_assembly().split("\n"))
+
+                res.append(f"\t{'\n\t'.join(temp)}")
+        else:
+            res.extend(
+                f"\t{'\n\t'.join(i.to_assembly().split('\n'))}"
+                for i in self.instructions
+            )
 
         return res
 
 
-class Mov(BaseModel):
+class Comment(BaseModel):
+    root: object
+
+    def to_assembly(self) -> str:
+        return f"# TACKY {self.root!s}"
+
+
+class Mov(Sized):
     src: Operand
     dest: Operand
 
     @staticmethod
-    def new(src: Operand, dest: Operand) -> list[Mov]:
-        if isinstance(src, (Stack, Data)) and isinstance(dest, (Stack, Data)):
-            # It's illegal to mov from one mem-address into another
-            # So we need to move to a strach register
-            scratch = Reg.get_scratch()
+    def new(size: dt.x64.Bit_Size, src: Operand, dest: Operand) -> list[Mov]:
+        """
+        TODO(Joaquim): Get rid of this and do it only at the `to_assembly` level
+        """
+        match src, dest:
+            case Stack() | Data(), Stack() | Data():
+                # It's illegal to mov from one mem-address into another
+                # So we need to move to a strach register
+                scratch = Reg.get_scratch(size=size)
+                return [
+                    Mov(size=size, src=src, dest=scratch),
+                    Mov(size=size, src=scratch, dest=dest),
+                ]
+
+            case Imm(root=root), _ if root >= dt.x64.max[32]:
+                if size == 32:
+                    # we have to truncate the value
+                    src = src.truncate()
+                    return [Mov(size=size, src=src, dest=dest)]
+                # Large nerds must first go into a register
+                scratch = Reg.get_scratch(size=size)
+                return [
+                    Mov(size=size, src=src, dest=scratch),
+                    Mov(size=size, src=scratch, dest=dest),
+                ]
+
+            case _:
+                # just one mov is fine
+                return [Mov(size=size, src=src, dest=dest)]
+
+    @model_validator(mode="after")
+    def assert_no_illegal(self):
+        match (self.src, self.dest):
+            case (Stack() | Data(), Stack() | Data()):
+                raise ValueError("You can't move from one memory address to another!")
+            case Imm(root=root), Stack() | Data() if root >= dt.x64.max[32]:
+                raise ValueError("Nope!")
+            case (Imm(), Imm()):
+                raise ValueError("You can't move one constant on top of another!")
+            case _:
+                return self
+
+    def to_assembly(self) -> str:
+        return f"mov{self.assembly_type()} {self.src.to_assembly()}, {self.dest.to_assembly()}"
+
+
+class Movsx(BaseModel):
+    src: Operand
+    dest: Operand
+
+    @staticmethod
+    def new(src: Operand, dest: Operand) -> list[Movsx | Mov]:
+        both_are_memory = all(isinstance(d, (Stack, Data)) for d in (src, dest))
+        source_is_imm = isinstance(src, Imm)
+        if both_are_memory or source_is_imm:
+            # Just like a normal mov, we have to do some tweaking
             return [
-                Mov(src=src, dest=scratch),
-                Mov(src=scratch, dest=dest),
+                *Mov.new(size=32, src=src, dest=Reg(root="R10", size=32)),
+                Movsx(src=Reg(root="R10", size=32), dest=Reg(root="R11", size=64)),
+                Mov(size=64, src=Reg(root="R11", size=64), dest=dest),
             ]
-        return [Mov(src=src, dest=dest)]
+        return [Movsx(src=src, dest=dest)]
 
     @model_validator(mode="after")
     def assert_no_illegal(self):
@@ -270,21 +480,20 @@ class Mov(BaseModel):
             case _:
                 return self
 
-    def to_assembly(self, type: dt.x64.Operation_Size = "l") -> str:
-        # In the future - the type will be inferred according to the src/dest
-        return f"mov{type} {self.src.to_assembly()}, {self.dest.to_assembly()}"
+    def to_assembly(self) -> str:
+        return f"movslq {self.src.to_assembly()}, {self.dest.to_assembly()}"
 
 
-class Unary(BaseModel):
+class Unary(Sized):
     op: tacky.Simple_Unary
     operand: Operand
 
     def to_assembly(self) -> str:
         match self.op:
             case "COMPLEMENT":
-                return f"notl {self.operand.to_assembly()}"
+                return f"not{self.assembly_type()} {self.operand.to_assembly()}"
             case "MINUS":
-                return f"negl {self.operand.to_assembly()}"
+                return f"neg{self.assembly_type()} {self.operand.to_assembly()}"
 
     @staticmethod
     def from_tacky(arg: tacky.Unary, get_val: Get_Val) -> tuple[Instruction, ...]:
@@ -295,9 +504,10 @@ class Unary(BaseModel):
                 destination=destination,
             ):
                 dst = get_val(destination)
+                size = BST.get_size(source)
                 return (
-                    Cmp(lhs=Imm(root=0), rhs=get_val(source)),
-                    Mov(src=Imm(root=0), dest=dst),
+                    Cmp(size=size, lhs=Imm(root=0), rhs=get_val(source)),
+                    Mov(size=size, src=Imm(root=0), dest=dst),
                     SetCC(cond="e", operand=dst),  # pyright: ignore[reportArgumentType]
                 )
 
@@ -308,39 +518,61 @@ class Unary(BaseModel):
             ):
                 src = get_val(source)
                 dest = get_val(destination)
+                size = BST.get_size(source)
                 return (
-                    *Mov.new(src=src, dest=dest),
+                    *Mov.new(size=size, src=src, dest=dest),
                     Unary(
+                        size=size,
                         op=operation,  # pyright: ignore[reportArgumentType]
                         operand=dest,
                     ),
                 )
 
 
-class Binary(BaseModel):
+class Binary(Sized):
     op: parser.Simple_Binary
     src: Operand
     dest: Operand
 
     def to_assembly(self) -> str:
-        ass_op = self.match_op(self.op)
+        def match_op(op: parser.Simple_Binary):
+            match op:
+                case "MINUS":
+                    return "sub"
+                case "PLUS":
+                    return "add"
+                case "ASTERISK":
+                    return "imul"
+                case "LEFT_SHIFT":
+                    return "sal"
+                case "RIGHT_SHIFT":
+                    return "sar"
+                case "AMPERSAND":
+                    return "and"
+                case "PIPE":
+                    return "or"
+                case "CARRET":
+                    return "xor"
+
+        ass_op = f"{match_op(self.op)}{self.assembly_type()}"
+
         match (self.op, self.src, self.dest):
-            case "ASTERISK", _, Stack():
-                scratch = Reg.get_scratch("R11")
-                pre = Mov(src=self.dest, dest=scratch)
-                after = Mov(src=scratch, dest=self.dest)
-                return (
-                    f"{pre.to_assembly()}\n"
-                    f"{ass_op} {self.src.to_assembly()}, {scratch.to_assembly()}\n"
-                    f"{after.to_assembly()}"
-                )
             case "PLUS" | "MINUS" | "ASTERISK" | "LEFT_SHIFT" | "RIGHT_SHIFT", _, Imm():
                 raise ValueError(
                     "Bad assembly! Destination can't be a constant! It holds the result"
                 )
+
+            case "ASTERISK", _, Stack() | Data():
+                scratch = Reg.get_scratch("R11", size=self.size)
+                pre = Mov.new(src=self.dest, dest=scratch, size=self.size)
+                after = Mov.new(src=scratch, dest=self.dest, size=self.size)
+                return (
+                    f"{'\n'.join(p.to_assembly() for p in pre)}\n"
+                    f"{Binary(op=self.op, src=self.src, dest=scratch, size=self.size).to_assembly()}\n"
+                    f"{'\n'.join(a.to_assembly() for a in after)}"
+                )
+
             case "LEFT_SHIFT" | "RIGHT_SHIFT", Reg() | Stack(), dest:
-                # TODO(Joaquim): See if we're using the C register and store it on the stack.
-                # This nerd clobbers the C register, which is sad!
                 # Left and right shift have a special rule
                 # From the manual: https://www.felixcloutier.com/x86/sal:sar:shl:shr
                 # > The destination operand can be a register or a memory
@@ -348,17 +580,31 @@ class Binary(BaseModel):
                 # > the CL register
                 # The source must be either a constant, or on the special %CL register
                 scratch = Reg.get_scratch("C", 8)
-                pre = Mov(src=self.src, dest=scratch)
+                pre = Mov(size=8, src=self.src, dest=scratch)
                 return (
-                    # Said special `cl` register must be moved with `movb`?????
-                    # Apparently the `CL` is a byte-sized register
-                    # So we must move a bite
-                    f"{pre.to_assembly('b')}\n"
+                    f"{pre.to_assembly()}\n"
                     f"{ass_op} {scratch.to_assembly()}, {dest.to_assembly()}\n"
                 )
             case _, Stack() | Data(), Stack() | Data():
-                scratch = Reg.get_scratch()
-                pre = Mov(src=self.src, dest=scratch)
+                scratch = Reg.get_scratch(size=self.size)
+                pre = Mov(size=self.size, src=self.src, dest=scratch)
+                return (
+                    f"{pre.to_assembly()}\n"
+                    f"{ass_op} {scratch.to_assembly()}, {self.dest.to_assembly()}"
+                )
+
+            case _, Imm(root=root), __:
+                if root < dt.x64.max[32]:
+                    return (
+                        f"{ass_op} {self.src.to_assembly()}, {self.dest.to_assembly()}"
+                    )
+                if self.size == 32:
+                    # truncate it
+                    src = self.src.truncate()
+                    return f"{ass_op} {src.to_assembly()}, {self.dest.to_assembly()}"
+                # shit! We have to first mov them
+                scratch = Reg.get_scratch(size=self.size)
+                pre = Mov(size=self.size, src=self.src, dest=scratch)
                 return (
                     f"{pre.to_assembly()}\n"
                     f"{ass_op} {scratch.to_assembly()}, {self.dest.to_assembly()}"
@@ -368,48 +614,35 @@ class Binary(BaseModel):
                 return f"{ass_op} {self.src.to_assembly()}, {self.dest.to_assembly()}"
 
     @staticmethod
-    def match_op(op: parser.Simple_Binary):
-        match op:
-            case "MINUS":
-                return "subl"
-            case "PLUS":
-                return "addl"
-            case "ASTERISK":
-                return "imull"
-            case "LEFT_SHIFT":
-                return "sall"
-            case "RIGHT_SHIFT":
-                return "sarl"
-            case "AMPERSAND":
-                return "andl"
-            case "PIPE":
-                return "orl"
-            case "CARRET":
-                return "xorl"
-
-    @staticmethod
     def from_tacky(inst: tacky.BinaryOp, get_val: Get_Val) -> tuple[Instruction, ...]:
         src1 = get_val(inst.src1)
         src2 = get_val(inst.src2)
         dest = get_val(inst.dest)
+
+        size = BST.get_size(inst.src1)
         match inst.operation:
             case "FORWARD_SLASH" | "PERCENT":
                 # Division/remainder - are a bit of an ass
-                # `idiv` slapts the result in `EAX` and the remainder in `EDX`
+                # `idiv` slaps the result in `A` and the remainder in `D`
                 return (
-                    Mov(src=src1, dest=Reg(root="A")),
-                    Cdq(),
-                    Idiv(root=src2),
+                    Mov(size=size, src=src1, dest=Reg(root="A", size=size)),
+                    Cdq(size=size),
+                    Idiv(size=size, root=src2),
                     Mov(
-                        src=Reg(root="A" if inst.operation == "FORWARD_SLASH" else "D"),
+                        size=size,
+                        src=Reg(
+                            root="A" if inst.operation == "FORWARD_SLASH" else "D",
+                            size=size,
+                        ),
                         dest=dest,
                     ),
                 )
 
             case "LE" | "LT" | "GT" | "GE" | "==" | "!=":
                 return (
-                    Cmp(lhs=src2, rhs=src1),
-                    Mov(src=Imm(root=0), dest=dest),
+                    Cmp(size=size, lhs=src2, rhs=src1),
+                    # The actual dest will be an int
+                    Mov(size=32, src=Imm(root=0), dest=dest),
                     SetCC(
                         cond=map_relational_to_cond_code(inst.operation),
                         operand=dest,  # pyright: ignore[reportArgumentType]
@@ -418,8 +651,9 @@ class Binary(BaseModel):
 
             case _arrithmetic:
                 return (
-                    *Mov.new(src=src1, dest=dest),
+                    *Mov.new(size=size, src=src1, dest=dest),
                     Binary(
+                        size=size,
                         op=inst.operation,  # pyright: ignore[reportArgumentType]
                         src=src2,
                         dest=dest,
@@ -428,34 +662,53 @@ class Binary(BaseModel):
         raise ValueError("unreachable")  # pyright: ignore[reportUnreachable]
 
 
-class Cmp(BaseModel):
+class Cmp(Sized):
     lhs: Operand
     rhs: Operand
 
     def to_assembly(self) -> str:
-        res: list[str] = []
-        source = self.lhs
-        dest = self.rhs
-
         match self.lhs, self.rhs:
             case (Stack() | Data(), Stack() | Data()):
-                scratch = Reg.get_scratch()
-                intermediate = Mov(src=self.lhs, dest=scratch)
-                res.append(intermediate.to_assembly())
-                source = scratch
+                scratch = Reg.get_scratch(size=self.size)
+                intermediate = Mov(src=self.lhs, dest=scratch, size=self.size)
+                return (
+                    f"{intermediate.to_assembly()}\n"
+                    f"cmp{self.assembly_type()} {scratch.to_assembly()}, {self.rhs.to_assembly()}"
+                )
 
             case (_, Imm()):
-                # The destination can never be the right-side
-                scratch = Reg.get_scratch()
-                intermediate = Mov(src=self.rhs, dest=scratch)
-                res.append(intermediate.to_assembly())
-                dest = scratch
+                # The destination can never be an Immediate
+                # (This seems weird, shouldn't I just switch them?)
+                dest = Reg.get_scratch(size=self.size)
+                intermediate = Mov(src=self.rhs, dest=dest, size=self.size)
+                if isinstance(self.lhs, Imm) and self.lhs.root >= dt.x64.max[32]:
+                    # ....dammmmit!
+                    another_scratch = Reg.get_scratch(which="R11", size=self.size)
+                    pre = Mov(size=self.size, src=self.lhs, dest=another_scratch)
+                    return (
+                        f"{intermediate.to_assembly()}\n"
+                        f"{pre.to_assembly()}\n"
+                        f"cmp{self.assembly_type()} {another_scratch.to_assembly()}, {dest.to_assembly()}"
+                    )
+                return (
+                    f"{intermediate.to_assembly()}\n"
+                    f"cmp{self.assembly_type()} {self.lhs.to_assembly()}, {dest.to_assembly()}"
+                )
+
+            case Imm(root=root), _:
+                if root >= dt.x64.max[32] and self.size == 64:
+                    # shit! We have to first mov them
+                    scratch = Reg.get_scratch(size=self.size)
+                    pre = Mov(size=self.size, src=self.lhs, dest=scratch)
+                    return (
+                        f"{pre.to_assembly()}\n"
+                        f"cmp{self.assembly_type()} {scratch.to_assembly()}, {self.rhs.to_assembly()}"
+                    )
 
             case _:
                 pass
 
-        res.append(f"cmpl {source.to_assembly()}, {dest.to_assembly()}")
-        return "\n".join(res)
+        return f"cmp{self.assembly_type()} {self.lhs.to_assembly()}, {self.rhs.to_assembly()}"
 
 
 class Jmp(BaseModel):
@@ -488,7 +741,7 @@ class Label(BaseModel):
         return f"{self.root}:"
 
 
-class Idiv(BaseModel):
+class Idiv(Sized):
     root: Operand
 
     def to_assembly(self) -> str:
@@ -502,71 +755,89 @@ class Idiv(BaseModel):
             case Imm():
                 # You can't divide a constant value
                 # It must first go into the scratch register
-                scratch = Reg.get_scratch()
+                scratch = Reg.get_scratch(size=self.size)
                 return (
-                    f"{Mov(src=self.root, dest=scratch).to_assembly()}\n"
-                    f"idivl {scratch.to_assembly()}"
+                    f"{Mov(size=self.size, src=self.root, dest=scratch).to_assembly()}\n"
+                    f"idiv{self.assembly_type()} {scratch.to_assembly()}"
                 )
             case _:
-                return f"idivl {self.root.to_assembly()}"
+                return f"idiv{self.assembly_type()} {self.root.to_assembly()}"
 
 
-class Cdq(BaseModel):
+class Cdq(Sized):
     def to_assembly(self) -> str:
-        return "cdq"
+        """
+        This mnemonic is different because (???)
+        """
+        match self.size:
+            case 64:
+                return "cqo"
+            case 32:
+                return "cdq"
+            case _:
+                raise ValueError("no idea man")
 
 
-class AllocateStack(BaseModel):
-    root: int = 0
-
-    def to_assembly(self) -> str:
-        if dt.USE_ONLY_RBP.get():
-            return f"subq ${abs(self.root)}, %rbp"
-        return f"subq ${abs(self.root)}, %rsp"
+def allocate_stack(bytes: int):
+    return Binary(
+        size=64, op="MINUS", src=Imm(root=abs(bytes)), dest=Reg(root="SP", size=64)
+    )
 
 
-class DeAllocateStack(RootModel[dt.Positive_Int]):
-    def to_assembly(self) -> str:
-        if dt.USE_ONLY_RBP.get():
-            return f"addq ${abs(self.root)}, %rbp"
-        return f"addq ${abs(self.root)}, %rsp"
+def de_allocate_stack(bytes: int):
+    return Binary(
+        size=64, op="PLUS", src=Imm(root=abs(bytes)), dest=Reg(root="SP", size=64)
+    )
 
 
 class Push(BaseModel):
     operand: Operand
 
     def to_assembly(self) -> str:
-        return f"pushq {self.operand.to_assembly()}"
+        match self.operand:
+            case Imm(root=root) if root >= dt.x64.max[32]:
+                scratch = Reg.get_scratch(size=64)
+                pre = Mov(size=64, src=self.operand, dest=scratch)
+                return f"{pre.to_assembly()}\npushq {scratch.to_assembly()}"
+            case _:
+                return f"pushq {self.operand.to_assembly()}"
 
 
 class Call(BaseModel):
     name: tacky.Valid_Identifier
 
     def to_assembly(self) -> str:
-        is_external = SYMBOL_TABLE.get().is_external(self.name)
+        is_external = BST.data[self.name].is_external
         return f"call {self.name}{'@PLT' if is_external else ''}"
 
     @staticmethod
     def from_ast(call: tacky.Func_Call, get_val: Get_Val) -> list[Instruction]:
         instructions: list[Instruction] = []
         args = len(call.args)
-        if args > dt.x64.NUMBER_OF_REGISTER_ARGUMENTS:
-            args_in_stack = args - dt.x64.NUMBER_OF_REGISTER_ARGUMENTS
-        else:
-            args_in_stack = 0
-        args_in_register = args - args_in_stack
+        # There's a maximum number of arguments that go on registers
+        args_in_register = min(args, dt.x64.NUMBER_OF_REGISTER_ARGUMENTS)
+        args_in_stack = args - args_in_register
+
         stack_padding = 0
-        if args_in_stack and args_in_stack % 2:
+
+        if args_in_stack % 2:
             stack_padding = 8
             # For _REASONS_ the stack must be 16-byte aligned If the number of
-            # arguments in the stack is odd, then we're gucci
+            # arguments in the stack is even, then we're gucci.
             # Since we can only push to the stack using 64 bits, an even number
-            # of make 16 bytes exactly.
-            instructions.append(AllocateStack(root=stack_padding))
+            # makes 16 bytes exactly.
+            # example:
+            # args_on_stack = { 64b } # OOPS, we're missing 8
+            # args_on_stack = { 64b, 64b } # All good! (64 + 64) / 8 % 16 == 0
+            # args_on_stack = { 64b, 64b, 64b } # OOPS, we're missing 8 again.
+            instructions.append(allocate_stack(stack_padding))
 
         for index in range(args_in_register):
             val = get_val(call.args[index])
-            instructions.append(Mov(src=val, dest=_get_system_v_call_convention(index)))
+            size = BST.get_size(call.args[index])
+            instructions.append(
+                Mov(size=size, src=val, dest=_get_system_v_call_convention(index, size))
+            )
 
         for index in reversed(
             range(
@@ -574,32 +845,56 @@ class Call(BaseModel):
                 dt.x64.NUMBER_OF_REGISTER_ARGUMENTS + args_in_stack,
             )
         ):
-            val = get_val(call.args[index])
+            current = call.args[index]
+            val = get_val(current)
+            size = BST.get_size(current)
+
             match val:
+                case Pseudo():
+                    # We shouldn't have reached this stage with a speudo register
+                    raise ValueError("Nope!")
                 case Reg(root=root):
                     # Ensure we're pushing
                     # only 64 bits
                     instructions.append(Push(operand=Reg(root=root, size=64)))
                 case Imm():
                     instructions.append(Push(operand=val))
-                case Stack() | Data():
-                    # If it's in memory we must first move it to `A` and then push that
-                    # This...I don't understand - I suppose that it's for when we use memory in general
-                    # instead of just "PUT EVERYTHING ON STACK"
+                case _ if size == 64:
+                    # We can just push it! No problemo
+                    instructions.append(Push(operand=val))
+                case _:
+                    # If it's in memory and NOT 64 bits then we must first move our 32 value
+                    # into the A register
+                    # Then we can push _that_ register over to the stack no problem
+                    accumulator_small = Reg(root="A", size=32)
                     accumulator = Reg(root="A", size=64)
+
                     instructions.extend(
-                        (Mov(src=val, dest=Reg(root="A")), Push(operand=accumulator))
+                        (
+                            Mov(
+                                size=32,
+                                src=val,
+                                dest=accumulator_small,
+                            ),
+                            Push(operand=accumulator),
+                        )
                     )
-                case Pseudo():
-                    raise ValueError("Nope!")
+
         # Finally - having set all of the little arguments, we can call the function
         instructions.append(Call(name=call.name))
         # Now we must adjust the stack pointer
         bytes_to_remove = 8 * args_in_stack + stack_padding
         if bytes_to_remove:
-            instructions.append(DeAllocateStack(bytes_to_remove))
+            instructions.append(de_allocate_stack(bytes_to_remove))
 
-        instructions.append(Mov(src=Reg(root="A"), dest=get_val(call.dest)))
+        return_size = BST.get_size(call.dest)
+        instructions.append(
+            Mov(
+                size=return_size,
+                src=Reg(root="A", size=return_size),
+                dest=get_val(call.dest),
+            )
+        )
         return instructions
 
 
@@ -623,6 +918,16 @@ class Imm(BaseModel):
     def to_assembly(self) -> str:
         return f"${self.root}"
 
+    def truncate(self):
+        root = self.root - dt.x64.umax[32] * (self.root // dt.x64.umax[32])
+        if root >= dt.x64.max[32]:
+            root -= dt.x64.umax[32]
+
+        if root >= dt.x64.max[32]:
+            raise ValueError("Programmer skill issue. Should be impossible")
+
+        return Imm(root=root)
+
 
 # fmt: on
 OLDEST_SCHOOL_REGISTERS = t.cast(
@@ -642,7 +947,7 @@ NEW_SCHOOL_REGISTERS = t.cast(
 
 class Reg(BaseModel):
     root: dt.x64.Register
-    size: dt.x64.Bit_Size = 32
+    size: dt.x64.Bit_Size
 
     @staticmethod
     def get_scratch(
@@ -666,16 +971,12 @@ class Reg(BaseModel):
         if self.root in OLD_SCHOOL_REGISTERS:
             match self.size:
                 case 64:
-                    # THIS IS WRONG! THIS IS ONLY FOR THE OLDEST SCHOOL ONES
-                    # MAKES A MESS OF DI/SI/ETC
                     return f"%r{self.root.lower()}"
                 case 32:
-                    # E is for `Extented`
                     return f"%e{self.root.lower()}"
                 case 16:
                     return f"%{self.root.lower()}"
                 case 8:
-                    # L is for `lower` 8 bits of a register
                     return f"%{self.root.lower()}l"
         match self.size:
             case 64:
@@ -713,7 +1014,11 @@ class Pseudo(BaseModel):
 
     root: str
 
+    # Attempt to "fix" the issue
+    # to_operand: t.Callable[[Pseudo], Stack | Data | Reg]  # noqa: ERA001
+
     def to_assembly(self) -> t.Never:
+        # return self.to_operand(self).to_assembly()  # noqa: ERA001
         raise NotImplementedError("This nerd should not be here yo!")
 
 
@@ -735,15 +1040,25 @@ class Ass(RootModel[str]):
     pass
 
 
-def static_var_to_assembly(var: tacky.Static_Variable):
+def static_var_to_assembly(var: Static_Variable):
     global_directive = f".globl {var.name}" if var.is_global else ""
-    section, actual_data = (
-        (".bss", ".zero 4") if var.init == 0 else (".data", f".long {var.init}")
-    )
+
+    match var.init.val, var.type.root:
+        case 0, "int":
+            section, actual_data = (".bss", ".zero 4")
+        case 0, "long":
+            section, actual_data = (".bss", ".zero 8")
+        case int(), "int":
+            section, actual_data = (".data", f".long {var.init.val}")
+        case int(), "long":
+            section, actual_data = (".data", f".quad {var.init.val}")
+        case _:
+            raise TypeError()
+
     text = f"""\
 	{global_directive} 
 	{section}
-	.align 4
+	.align {var.alignment}
 {var.name}:
 	{actual_data}"""
 
@@ -758,7 +1073,7 @@ def _get_8_bit(operand: Stack | Reg):
             return Reg(root=root, size=8)
 
 
-def _get_system_v_call_convention(index: int):
+def _get_system_v_call_convention(index: int, size: dt.x64.Bit_Size):
     reg = dt.x64.from_arg_number.get(index)
     if reg is None:
         # They're already on the stack!
@@ -768,4 +1083,4 @@ def _get_system_v_call_convention(index: int):
         # See `chapter11/README.md:196`
         # Note: when we add different CTypes I'll have to tweak this
         return Stack(root=16 + 8 * (index - 6))
-    return Reg(root=reg)
+    return Reg(root=reg, size=size)

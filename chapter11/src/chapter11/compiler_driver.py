@@ -35,7 +35,7 @@ def preprocess(input_file: Path) -> PreProcessed:
 
 
 def compile_but_no_link(filename: Path, ass: codegen.Ass, output_file: Path | None):
-    assembly_path = _file_extensions(filename, ".c$", "s")
+    assembly_path = _file_extensions(filename, ".c$", "s", override=False)
     output_file = output_file or _file_extensions(filename, ".c$", "o")
 
     with open(assembly_path, "w") as f:
@@ -56,7 +56,7 @@ def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | No
 
     assembly_paths: list[Path] = []
     for filename, ass in zip(filenames, asses, strict=True):
-        assembly_path = _file_extensions(filename, ".c$", "s")
+        assembly_path = _file_extensions(filename, ".c$", "s", override=False)
         if output_file is None:
             # just grab the first one lol
             output_file = _file_extensions(filename, ".c$", "")
@@ -77,13 +77,21 @@ def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | No
     return output_file
 
 
-def _file_extensions(input_file: Path, remove: str, new: str):
+def _file_extensions(input_file: Path, remove: str, new: str, *, override: bool = True):
     assert input_file.exists(), "Dude - where is the file?"
     tweaked_name = re.sub(remove, "", input_file.name)
     if new:
         tweaked_name = f"{tweaked_name}.{new}"
 
-    return input_file.parent / f"{tweaked_name}"
+    res = input_file.parent / f"{tweaked_name}"
+    if override:
+        return res
+    # We want to keep the existing file
+    i = -1
+    while res.exists():
+        i += 1
+        res = input_file.parent / f"{i}_{tweaked_name}"
+    return res
 
 
 class Args(t.NamedTuple):

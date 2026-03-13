@@ -50,8 +50,8 @@ def emit_tacky(
             return emit_exp(block, instructions)
         case parser.Statement():
             return _match_statement(block, instructions)
-        case parser.Variable_Declaration(name=name, init=init):
-            var = Var(name=name.root)
+        case parser.Variable_Declaration(name=name, init=init, type=type):
+            var = Var.new(type=type, name=name.root)
             if var.is_static():
                 return var
             if init:
@@ -104,7 +104,6 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                     ),
                     goto,
                     instructions,
-                    store_result=False,
                 )
 
             # We always put the goto-default at the end
@@ -200,7 +199,6 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 condition,
                 then,
                 instructions,
-                store_result=False,
             )
         case parser.IfStatement(condition=condition, then=then, else_s=else_s):
             _ = do_an_if_else(
@@ -208,7 +206,7 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 then,
                 else_s,  # pyright: ignore[reportArgumentType]
                 instructions,
-                store_result=False,
+                store_result=None,
             )
         case parser.Goto(label=label):
             instructions.append(Jump(target=pf.to_valid_c_name(label.root)))
@@ -234,9 +232,9 @@ def emit_exp(
             res = emit_exp(inner, instructions)
             if target_type == inner.type:
                 return res
-            destination = Var.new(type=inner.type)
+            destination = Var.new(type=target_type)
             inst: Instruction
-            if target_type.root == parser.CType(root="long"):
+            if target_type.root == "long":
                 inst = SignExtend(src=res, dest=destination)
             else:
                 inst = Truncate(src=res, dest=destination)
@@ -244,7 +242,6 @@ def emit_exp(
             return destination
         case parser.Factor() | parser.Expression():
             return emit_exp(exp.root, instructions)
-
         case parser.Identifier(root=name):
             return Var.new(type=exp.type, name=name)
         case parser.Constant():
@@ -257,7 +254,11 @@ def emit_exp(
 
         case parser.Conditional(left=left, middle=middle, right=right):
             cond_val = do_an_if_else(
-                left, middle, right, instructions, store_result=True
+                left,
+                middle,
+                right,
+                instructions,
+                store_result=exp.type,
             )
             assert cond_val, "NOPE"
             return cond_val
@@ -361,11 +362,15 @@ def _emit_binop(
 ):
     bin_op, lhs, rhs = op.op, op.lhs, op.rhs
     type = parser.CType.assert_is_trivial(type)
+
+    def new_temp(name: str):
+        return Var.new(type=type, name=_make_temp(name))
+
     match bin_op:
         case "AND":
             end = _make_label("and_end")
-            dst = Var.new(type=type, name=_make_temp("result_and"))
-            tmp = Var.new(type=type, name=_make_temp("tmp"))
+            dst = new_temp("result_and")
+            tmp = new_temp("tmp_for_and")
 
             # DON'T use `extend` for the whole thing!
             # The instructions will be appendded out of order!
@@ -390,8 +395,8 @@ def _emit_binop(
             return dst
         case "OR":
             end = _make_label("or_end")
-            dst = Var(name=_make_temp("result_or"))
-            tmp = Var(name=_make_temp("tmp"))
+            dst = new_temp("result_or")
+            tmp = new_temp("tmp_for_or")
 
             instructions.append(Copy(src=parser.Constant.from_bool(1), dest=dst))
             res_lhs = emit_exp(lhs, instructions)
@@ -418,7 +423,7 @@ def _emit_binop(
         case _:
             v1 = emit_exp(lhs, instructions)
             v2 = emit_exp(rhs, instructions)
-            dst = Var(name=_make_temp("_tmp_bin_op_result"))
+            dst = new_temp("_tmp_bin_op_result")
             instructions.append(BinaryOp(operation=bin_op, src1=v1, src2=v2, dest=dst))
             return dst
 
@@ -427,8 +432,6 @@ def do_an_if(
     condition: parser.Expression | Value,
     then: parser.Statement | parser.Expression,
     instructions: list[Instruction],
-    *,
-    store_result: bool,
 ):
     """
     For convenience - also accepts some `Value` so we can re-use previous calculations
@@ -437,27 +440,16 @@ def do_an_if(
         case parser.Constant() | Var():
             condition_result = condition
         case parser.Expression():
-            condition_result = Var(name=_make_temp("condition_result"))
-            c = emit_exp(condition, instructions)
-            instructions.append(Copy(src=c, dest=condition_result))
-    result_var = Var(name=_make_temp("result_var")) if store_result else None
+            condition_result = emit_exp(condition, instructions)
     end_label = _make_label("end")
 
-    def store_the_res(res: Value | None):
-        assert res is not None and result_var is not None, "Weeeeeeeeeird"
-        instructions.append(Copy(src=res, dest=result_var))
-
     instructions.append(JumpIfZero(condition=condition_result, target=end_label))
-    res = emit_tacky(
+    _ = emit_tacky(
         then,
         instructions,
     )
-    if store_result:
-        store_the_res(res)
 
     instructions.append(Label(identifier=end_label))
-
-    return result_var
 
 
 def do_an_if_else(
@@ -466,10 +458,19 @@ def do_an_if_else(
     else_s: parser.Statement | parser.Expression,
     instructions: list[Instruction],
     *,
-    store_result: bool,
+    store_result: parser.CType | None,
 ):
-    condition_result = Var(name=_make_temp("condition_result"))
-    result_var = Var(name=_make_temp("result_var")) if store_result else None
+    """
+    The store result is for conditional-expressions, since we need to copy over
+    the result to some temporary value
+    Example: `if (<exp>) foo(); else bar();` doesn't store the result of the foo/bar
+    But `int yo = <exp> ? foo() : bar();` _does_, we need to send either `foo` or `bar` and save it
+    """
+    result_var = (
+        Var.new(type=store_result, name=_make_temp("result_of_conditional_expression"))
+        if store_result
+        else None
+    )
     else_label = _make_label("else_label")
     end_label = _make_label("end")
 
@@ -477,8 +478,7 @@ def do_an_if_else(
         assert res is not None and result_var is not None, "Weeeeeeeeeird"
         instructions.append(Copy(src=res, dest=result_var))
 
-    c = emit_exp(condition, instructions)
-    instructions.append(Copy(src=c, dest=condition_result))
+    condition_result = emit_exp(condition, instructions)
 
     instructions.append(JumpIfZero(condition=condition_result, target=else_label))
     res = emit_tacky(
@@ -515,7 +515,9 @@ def emit_copy_exp(var: Var, exp: parser.Expression, instructions: list[Instructi
 def emit_func_call(func: parser.Func_Call, instructions: list[Instruction]) -> Value:
     name = pf.to_valid_c_name(func.name.root)
     args = [emit_exp(i, instructions) for i in func.args]
-    dest = Var(name=_make_temp())
+    symbol = semantic_analysis.SYMBOL_TABLE.get().data[name].type
+    assert isinstance(symbol, parser.CType.FuncType)
+    dest = Var.new(type=symbol.return_type, name=_make_temp("func_call_destination"))
     instructions.append(
         Func_Call(
             name=name,
@@ -623,7 +625,7 @@ class Function_Definition(BaseModel):
         symbol = symbol_table.data[ast.name.root]
         assert isinstance(symbol, semantic_analysis.Symbol_Table.Func), "Compiler bug!"
         params = [
-            (Var(name=id.root), type)
+            (Var.new(type, name=id.root), type)
             for (id, type) in zip(ast.param_list, ast.type.params, strict=True)
         ]
         return Function_Definition(
@@ -693,7 +695,7 @@ class Var(BaseModel):
     def new(type: parser.CType | None, name: str | None = None):
         type = parser.CType.assert_is_trivial(type)
         if name is None:
-            name = _make_temp()
+            name = _make_temp("TEMP_ANON_VAR")
         res = Var(name=name)
         if (
             res.is_static()
