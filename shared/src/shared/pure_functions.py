@@ -1,10 +1,11 @@
 from collections.abc import Sequence, Iterator
 from contextvars import ContextVar
+from inspect import Traceback
 import re
 import typing as t
 import textwrap
 
-from contextlib import contextmanager, suppress
+from contextlib import AbstractContextManager, contextmanager, suppress
 import shared.data_types as dt
 
 
@@ -68,6 +69,54 @@ def set_context[T](context: ContextVar[T], val: T):
     token = context.set(val)
     yield
     context.reset(token)
+
+
+@t.final
+class stfu[T: BaseException](AbstractContextManager[list[T]]):
+    """
+    Basically just like `suppress`. BUT - we get to have a reference of all of the exceptions
+    that have been caught! That way we can re-raise them later
+
+    ```python
+     with stfu(AssertionError) as caught:
+         assert foo()
+         # bla bla bla
+     # Execution still resumes here if the assert failed!
+     if some_other_thing():
+         raise ExceptionGroup("Yo! We messed up", caught)
+    ```
+    """
+
+    def __init__(self, *exceptions: type[T]):
+        self.caught: list[T] = []
+        self._exceptions = exceptions
+
+    @t.override
+    def __enter__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+        _ = super().__enter__()
+        return self.caught
+
+    @t.override
+    def __exit__(  # pyright: ignore[reportIncompatibleMethodOverride]
+        self,
+        exctype: type[T] | None,
+        excinst: T | None,
+        _traceback: Traceback,
+    ):
+        # See http://bugs.python.org/issue12029 for more details
+        if exctype is None:
+            return
+        if issubclass(exctype, self._exceptions):
+            self.caught.append(excinst)  # pyright: ignore[reportArgumentType]
+            return True
+        if issubclass(exctype, BaseExceptionGroup):
+            match, rest = t.cast(BaseExceptionGroup, excinst).split(self._exceptions)
+            if rest is None:
+                if match:
+                    self.caught.extend(match.exceptions)  # pyright: ignore[reportArgumentType]
+                return True
+            raise rest
+        return False
 
 
 def to_valid_c_name(text: str) -> dt.Identifier:

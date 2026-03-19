@@ -190,11 +190,7 @@ type AST = list[str]
 def lexer(input: Path):
     pre = preprocess(input)
     with open(pre.root) as f:
-        return pre, lex(f.read())
-
-
-def assembly_generation(_ast: codegen.Program) -> str:
-    return ""
+        return pre, lex(f.read(), input)
 
 
 def main():

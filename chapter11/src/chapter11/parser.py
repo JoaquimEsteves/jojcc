@@ -69,6 +69,10 @@ from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validato
 from chapter11 import lexer
 
 
+class HasLoc(BaseModel):
+    location: lexer.Location = lexer.Location(0, 0)
+
+
 class Program(BaseModel):
     """
     <program> ::= {<declaration>}
@@ -129,10 +133,10 @@ class Specifiers:
         storage_classes: list[Specifiers.Storage_Class] = []
 
         while tokens:
-            (next_token, token, *_), *rest = tokens
+            (next_token, token, loc), *rest = tokens
             match next_token:
                 case "INT_KEYWORD" | "LONG_KEYWORD":
-                    types.append(CType.from_token((next_token, token, *_)))  # pyright: ignore[reportArgumentType]
+                    types.append(CType.from_token((next_token, token, loc)))
                     tokens = rest
                 case "EXTERN_KEYWORD" | "STATIC_KEYWORD":
                     # pydantic will catch us if we goof here
@@ -142,7 +146,7 @@ class Specifiers:
                     # We're done here!
                     break
                 case _:
-                    raise ValueError(f"What is this {next_token=} doing here bro?")
+                    raise ParseError(loc, f"What is this {next_token=} doing here bro?")
 
         # Technically - the types can be automatically inferred to be 'int'
         # But the book says to just enforce it
@@ -153,7 +157,10 @@ class Specifiers:
             # shit! It's weird but it's OK to define a long as
             # int static long
             as_set = {str(t.root) for t in types}
-            assert as_set == {"long", "int"}
+            if as_set != {"long", "int"}:
+                raise ParseError(
+                    tokens[0][2], "Bad types! We only accept int/long or long int"
+                )
             types = [CType(root="long")]
 
         assert len(storage_classes) <= 1, "BRO!"
@@ -171,7 +178,7 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
 
     name = Identifier.from_tokens(identifier)
 
-    (next_token, *_), *rest = rest
+    (next_token, _, loc), *rest = rest
     match next_token:
         case "=":
             exp, rest = Expression.from_tokens(rest)
@@ -181,6 +188,7 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     name=name,
                     init=exp,
                     storage=storage,
+                    location=loc,
                 ),
                 _next_is_semicolon(rest),
             )
@@ -191,6 +199,7 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     name=name,
                     storage=storage,
                     init=None,
+                    location=loc,
                 ),
                 rest,
             )
@@ -219,14 +228,15 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     body=body,
                     param_list=[p.name for p in param_list],
                     storage=storage,
+                    location=loc,
                 ),
                 rest,
             )
         case _:
-            raise ValueError("Syntax error!")
+            raise ParseError(loc, "Syntax error!")
 
 
-class Function_Declaration(BaseModel):
+class Function_Declaration(HasLoc):
     """
     <function-declaration> ::= {<specifier>}+ <identifier> "(" <param-list> ")" (<block> | ";")
     """
@@ -286,7 +296,11 @@ class Function_Declaration(BaseModel):
             identifier = Identifier.from_tokens(identifier_token)
             res.append(
                 Variable_Declaration(
-                    type=ctype, name=identifier, storage=None, init=None
+                    type=ctype,
+                    name=identifier,
+                    storage=None,
+                    init=None,
+                    location=rest[0][2],
                 )
             )
 
@@ -304,7 +318,7 @@ type Block_Item = Statement | Declaration
 type Declaration = Variable_Declaration | Function_Declaration
 
 
-class Variable_Declaration(BaseModel):
+class Variable_Declaration(HasLoc):
     """
     <variable-declaration> ::= "int" <identifier> ["=" <exp>] ";"_
     """
@@ -320,7 +334,7 @@ class Variable_Declaration(BaseModel):
         return f"{pre} {self.init or 'undefined'})"
 
 
-class Labelled_Construct(BaseModel):
+class Labelled_Construct(HasLoc):
     """
     Whenever we `continue/break` we need to know _which_ loop statement we're
     actually breaking from.
@@ -441,8 +455,16 @@ class For(Labelled_Construct):
 
         body, rest = Statement.from_tokens(rest)
 
+        loc = tokens[0][2]
         return Statement(
-            root=For(init=init_exp, condition=condition_exp, post=post_exp, body=body)
+            root=For(
+                init=init_exp,
+                condition=condition_exp,
+                post=post_exp,
+                body=body,
+                location=loc,
+            ),
+            location=loc,
         ), rest
 
     @staticmethod
@@ -457,19 +479,23 @@ class For(Labelled_Construct):
             # for(; 1 ;) {...}
             return None
         decl: Declaration | None = None
-        with suppress(ValueError, AssertionError):
+        stfu = pf.stfu(ValueError, AssertionError)
+        with stfu:
             decl, rest = declaration_from_tokens(tokens)
-            assert isinstance(decl, Variable_Declaration), (
-                "why you declaring a function here?"
-            )
+            assert isinstance(decl, Variable_Declaration)
             # It's very easy to catch this error here
             # But the book expects us to catch them on the semantic-analysis phase
             # assert decl.storage is None, "For-Init can't have a storage class bro"
-            assert rest == [], "We left food on the table!"
+            assert rest == []
             return decl
-        tokens_sans_semicolon = tokens[:-1]
-        # If it's not a declaration it's _GOT_ to be an expression
-        return Expression.from_tokens(tokens_sans_semicolon, assert_no_food_left=True)
+        with stfu:
+            tokens_sans_semicolon = tokens[:-1]  # pyright: ignore[reportUnreachable]
+            # If it's not a declaration it's _GOT_ to be an expression
+            return Expression.from_tokens(
+                tokens_sans_semicolon, assert_no_food_left=True
+            )
+
+        raise ExceptionGroup("Failed to parse for-init!", stfu.caught)
 
 
 type Trivial_SubType = t.Literal["int", "long"]
@@ -523,7 +549,7 @@ class CType(BaseModel):
 type TrivialType = t.Annotated[CType, AfterValidator(CType.assert_is_trivial)]
 
 
-class ReturnStatement(BaseModel):
+class ReturnStatement(HasLoc):
     exp: Expression
 
     @t.override
@@ -531,7 +557,7 @@ class ReturnStatement(BaseModel):
         return f"(return {self.exp!s})"
 
 
-class IfStatement(BaseModel):
+class IfStatement(HasLoc):
     condition: Expression
     then: Statement
     else_s: Statement | None = None
@@ -546,7 +572,7 @@ class IfStatement(BaseModel):
         return f"{res}{body})"
 
 
-class Statement(BaseModel):
+class Statement(HasLoc):
     """
     <statement> ::= "return" <exp> ";"
         | <exp> ";"
@@ -586,36 +612,40 @@ class Statement(BaseModel):
 
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed]:
-        (next_token, *_), *rest = tokens
+        (next_token, _, loc), *rest = tokens
 
         def get_back_expression():
             # Well then it must be an expression followed by a semicolon
             exp, rest = Expression.from_tokens(tokens)
 
-            (semicolon, *_), *rest = rest
-            assert semicolon == "SEMICOLON", "Missing semicolon!"
-            return Statement(root=exp), rest
+            (semicolon, _, loc), *rest = rest
+            if semicolon != "SEMICOLON":
+                raise ParseError(loc, "Missing semicolon!")
+
+            return Statement(root=exp, location=tokens[0][2]), rest
 
         match next_token:
             case "SEMICOLON":
                 return (
-                    Statement(root="nope"),
+                    Statement(root="nope", location=loc),
                     rest,
                 )
             case "BREAK_KEYWORD":
                 return (
-                    Statement(root=Break()),
+                    Statement(root=Break(location=loc), location=loc),
                     _next_is_semicolon(rest),
                 )
             case "CONTINUE_KEYWORD":
                 return (
-                    Statement(root=Continue()),
+                    Statement(root=Continue(location=loc), location=loc),
                     _next_is_semicolon(rest),
                 )
             case "RETURN_KEYWORD":
                 exp, rest = Expression.from_tokens(rest)
                 return (
-                    Statement(root=ReturnStatement(exp=exp)),
+                    Statement(
+                        root=ReturnStatement(exp=exp, location=loc), location=loc
+                    ),
                     _next_is_semicolon(rest),
                 )
             case "WHILE_KEYWORD":
@@ -623,12 +653,17 @@ class Statement(BaseModel):
                 closed_parens = get_closing(rest, ")")
                 inner_expr = rest[:closed_parens]
                 after = rest[closed_parens + 1 :]
-                assert inner_expr, "We need an expression for the while!"
-                assert after, "A while needs a statement brother!"
+                if not inner_expr:
+                    raise ParseError(loc, "We need an expression for the while!")
+                if not after:
+                    raise ParseError(loc, "A while needs a statement brother!")
                 condition = Expression.from_tokens(inner_expr, assert_no_food_left=True)
                 body, rest = Statement.from_tokens(after)
                 return (
-                    Statement(root=While(condition=condition, body=body)),
+                    Statement(
+                        root=While(condition=condition, body=body, location=loc),
+                        location=loc,
+                    ),
                     rest,
                 )
             case "DO_KEYWORD":
@@ -644,7 +679,10 @@ class Statement(BaseModel):
                 )
                 rest = _next_is_semicolon(rest[closed_parens + 1 :])
                 return (
-                    Statement(root=DoWhile(condition=condition, body=body)),
+                    Statement(
+                        root=DoWhile(condition=condition, body=body, location=loc),
+                        location=loc,
+                    ),
                     rest,
                 )
             case "FOR_KEYWORD":
@@ -664,31 +702,41 @@ class Statement(BaseModel):
                 return (
                     Statement(
                         root=IfStatement(
-                            condition=expression, then=then_stmt, else_s=else_stmt
-                        )
+                            condition=expression,
+                            then=then_stmt,
+                            else_s=else_stmt,
+                            location=loc,
+                        ),
+                        location=loc,
                     ),
                     rest,
                 )
 
             case "GOTO":
                 identifier, *rest = rest
-                assert identifier[0] == "IDENTIFIER", (
-                    "After a `goto` we need an identifier!"
+                if identifier[0] != "IDENTIFIER":
+                    raise ParseError(
+                        identifier[2], "After a `goto` we need an identifier!"
+                    )
+
+                stmt = Statement(
+                    root=Goto(label=Identifier.from_tokens(identifier), location=loc),
+                    location=loc,
                 )
-                stmt = Statement(root=Goto(label=Identifier.from_tokens(identifier)))
                 return stmt, _next_is_semicolon(rest)
             case "IDENTIFIER":
-                (colon, *_), *maybe = rest
+                (colon, _, loc), *maybe = rest
                 # Labeled statement
                 if colon == ":":
                     child = Statement.from_tokens(maybe)
-                    assert child is not None, "Nope! A label requires a statement"
                     child_stmt, rest = child
                     return Statement(
                         root=Label(
                             label=Identifier.from_tokens(tokens[0]),
                             statement=child_stmt,
-                        )
+                            location=loc,
+                        ),
+                        location=loc,
                     ), rest
                 # probably an expression
                 return get_back_expression()
@@ -698,21 +746,22 @@ class Statement(BaseModel):
                 return Statement(
                     root=Block.from_tokens(
                         rest[0:closing_bracket_index],
-                    )
+                    ),
+                    location=loc,
                 ), rest[closing_bracket_index + 1 :]
 
             case "SWITCH_KEYWORD":
                 switch, rest = Switch.from_tokens(rest)
-                return Statement(root=switch), rest
+                return Statement(root=switch, location=loc), rest
             case "CASE_KEYWORD" | "DEFAULT_KEYWORD":
                 case, rest = SwitchCase.from_tokens(tokens)
-                return Statement(root=case), rest
+                return Statement(root=case, location=loc), rest
             case _:
                 # probably an expression
                 return get_back_expression()
 
 
-class Goto(BaseModel):
+class Goto(HasLoc):
     label: Identifier
 
     @t.override
@@ -720,7 +769,7 @@ class Goto(BaseModel):
         return f"(goto {self.label!s})"
 
 
-class Label(BaseModel):
+class Label(HasLoc):
     label: Identifier
     statement: Statement
 
@@ -729,7 +778,7 @@ class Label(BaseModel):
         return f"(label {self.label!s}\n{pf.indent(str(self.statement))})"
 
 
-class Block(BaseModel):
+class Block(HasLoc):
     body: list[Block_Item]
 
     @t.override
@@ -758,31 +807,32 @@ class Block(BaseModel):
         ```
         """
         parsed_body: list[Block_Item] = []
+        loc = tokens[0][2] if tokens else lexer.Location(0, 0)
 
         while tokens:
             item, tokens = Block.block_item_from_tokens(tokens)
 
             parsed_body.append(item)
 
-        return Block(body=parsed_body)
+        return Block(body=parsed_body, location=loc)
 
     @staticmethod
     def block_item_from_tokens(tokens: lexer.Lexed) -> tuple[Block_Item, lexer.Lexed]:
-        block_item: tuple[Block_Item, lexer.Lexed] | None = None
-        with suppress(ValueError, AssertionError):
-            block_item = declaration_from_tokens(tokens)
-        with suppress(ValueError, AssertionError):
-            block_item = Statement.from_tokens(tokens)
-        if block_item is None:
-            raise ValueError("I accept declarations or statements!")
-        return block_item
+        stfu = pf.stfu(ValueError, AssertionError)
+
+        with stfu:
+            return declaration_from_tokens(tokens)
+        with stfu:
+            return Statement.from_tokens(tokens)  # pyright: ignore[reportUnreachable]
+
+        raise ExceptionGroup("I accept declarations or statements!", stfu.caught)
 
 
 class Typed(BaseModel):
     type: CType | None
 
 
-class Expression(Typed):
+class Expression(Typed, HasLoc):
     """
     <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
     """
@@ -871,7 +921,13 @@ class Expression(Typed):
         """
         In practise the CType should never be none
         """
-        return Expression(root=Factor(root=Identifier(name), type=type), type=type)
+        return Expression(
+            root=Factor(
+                root=Identifier(name),
+                type=type,
+            ),
+            type=type,
+        )
 
     @t.override
     def __str__(self):
@@ -903,6 +959,7 @@ class Expression(Typed):
             tokens: lexer.Lexed, min_prec: int = 0
         ) -> tuple[Expression, lexer.Lexed]:
             left, right = Factor.parse(tokens)
+            loc = tokens[0][2]
             while right:
                 (operator, _identifier, _), *rest = right
 
@@ -917,11 +974,13 @@ class Expression(Typed):
                     # shit, I hate these nerds
                     other_rest = rest
                     left = Factor(
+                        location=loc,
                         type=None,
                         root=Unary(
                             op=operator,
                             exp=left,  # pyright: ignore[reportArgumentType]
                             pre=False,
+                            location=loc,
                         ),
                     )
 
@@ -931,21 +990,25 @@ class Expression(Typed):
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
-                    identifier = Expression(root=left, type=None)
+                    identifier = Expression(root=left, type=None, location=loc)
                     left = (
-                        Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
+                        Fancy_Assignment(
+                            lhs=identifier, rhs=rhs, type=operator, location=loc
+                        )
                         if operator != "="
-                        else Normal_Assignment(lhs=identifier, rhs=rhs)
+                        else Normal_Assignment(lhs=identifier, rhs=rhs, location=loc)
                     )
                 elif operator == "?":
                     middle, rhs = inner(rest, 0)
-                    (colon, *_), *rhs = rhs
-                    assert colon == ":", "BAD IF EXPRESSION"
+                    (colon, _, loc), *rhs = rhs
+                    if colon != ":":
+                        raise ParseError(loc, "BAD IF EXPRESSION")
                     right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
                     left = Conditional(
-                        left=Expression(root=left, type=None),
+                        left=Expression(root=left, type=None, location=loc),
                         middle=middle,
                         right=right,
+                        location=loc,
                     )
 
                 else:
@@ -953,21 +1016,23 @@ class Expression(Typed):
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
                     left = BinaryOp(
                         op=operator,  # pyright: ignore[reportArgumentType]
-                        lhs=Expression(root=left, type=None),
+                        lhs=Expression(root=left, type=None, location=loc),
                         rhs=rhs,
+                        location=loc,
                     )
                 right = other_rest
 
-            return Expression(root=left, type=None), right
+            return Expression(root=left, type=None, location=loc), right
 
         exp, rest = inner(tokens, min_prec)
         if assert_no_food_left:
-            assert rest == [], "We left food on the table!"
+            if rest:
+                raise ParseError(rest[0][2], "We left food on the table!")
             return exp
         return exp, rest
 
 
-class Constant(BaseModel):
+class Constant(HasLoc):
     root: int
     ctype: TrivialType
 
@@ -1022,7 +1087,7 @@ class Constant(BaseModel):
                 return val
 
 
-class Factor(Typed):
+class Factor(Typed, HasLoc):
     """
     The name `factor` comes from the fact that this symbol can appear as a
     _factor_ in a multiplication expression.
@@ -1052,7 +1117,7 @@ class Factor(Typed):
                 if not rest or rest[0][0] != "OPEN_PARENS":
                     # It's just an identifier
                     return (
-                        Factor(root=ident, type=None),
+                        Factor(root=ident, type=None, location=charno),
                         rest,
                     )
 
@@ -1061,7 +1126,11 @@ class Factor(Typed):
                 arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
 
                 return (
-                    Factor(root=Func_Call(name=ident, args=arg_list), type=None),
+                    Factor(
+                        root=Func_Call(name=ident, args=arg_list, location=charno),
+                        type=None,
+                        location=charno,
+                    ),
                     rest[corresponding_closed + 1 :],
                 )
             case "CONSTANT" | "LONG_CONSTANT":
@@ -1070,6 +1139,7 @@ class Factor(Typed):
                         root=Constant.from_token(
                             (token, identifier, charno),  # pyright: ignore[reportArgumentType]
                         ),
+                        location=charno,
                         type=None,
                     ),
                     rest,
@@ -1078,13 +1148,14 @@ class Factor(Typed):
                 if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
                     # shoot, it's a cast!
                     cast, rest = Cast.from_tokens(rest)
-                    return Factor(root=cast, type=None), rest
+                    return Factor(root=cast, type=None, location=charno), rest
                 corresponding_closed = get_closing(rest, ")")
                 return (
                     Factor(
                         root=Expression.from_tokens(
                             rest[:corresponding_closed], assert_no_food_left=True
                         ),
+                        location=charno,
                         type=None,
                     ),
                     rest[corresponding_closed + 1 :],
@@ -1095,16 +1166,17 @@ class Factor(Typed):
                 return (
                     Factor(
                         type=None,
-                        root=Unary(op=token, exp=exp),
+                        location=charno,
+                        root=Unary(op=token, exp=exp, location=charno),
                     ),
                     rest,
                 )
             case _:
                 pass
-        raise AssertionError(f"Syntax Error, unknown {token=} at {charno=}")
+        raise ParseError(charno, f"Syntax Error, unknown {token=}")
 
 
-class Func_Call(BaseModel):
+class Func_Call(HasLoc):
     name: Identifier
     args: list[Expression]
 
@@ -1124,7 +1196,7 @@ class Func_Call(BaseModel):
         return lst
 
 
-class Cast(BaseModel):
+class Cast(HasLoc):
     target_type: CType
     exp: Expression
 
@@ -1135,20 +1207,22 @@ class Cast(BaseModel):
         """
         corresponding_closed = get_closing(tokens, ")")
         (ctype, specifier), nada = Specifiers.from_tokens(tokens[:corresponding_closed])
-        assert specifier is None and nada == [], "Failed to parse type of cast!"
+
+        if specifier is not None or nada != []:
+            raise ParseError(tokens[0][2], "Failed to parse type of cast!")
 
         exp, rest = Expression.from_tokens(
             tokens[corresponding_closed + 1 :], min_prec=operator_precedence("CAST")
         )
 
-        return Cast(target_type=ctype, exp=exp), rest
+        return Cast(target_type=ctype, exp=exp, location=tokens[0][2]), rest
 
     @t.override
     def __str__(self):
         return f"(cast-to-{self.target_type} {self.exp})"
 
 
-class Unary(BaseModel):
+class Unary(HasLoc):
     op: t.Literal[
         "COMPLEMENT",
         "MINUS",
@@ -1267,7 +1341,7 @@ BINARY_OP_PRECEDENCE: dict[Binary_Op_Or_Extras, int] = {
 }
 
 
-class BinaryOp(BaseModel):
+class BinaryOp(HasLoc):
     op: Binary_Op_Without_Assignment
     lhs: Expression
     rhs: Expression
@@ -1277,7 +1351,7 @@ class BinaryOp(BaseModel):
         return f"({self.op} {self.lhs.root!s} {self.rhs.root!s})"
 
 
-class Normal_Assignment(BaseModel):
+class Normal_Assignment(HasLoc):
     lhs: LValue
     rhs: Expression
 
@@ -1286,7 +1360,7 @@ class Normal_Assignment(BaseModel):
         return f"(= {self.lhs!s} {self.rhs.root!s})"
 
 
-class Conditional(BaseModel):
+class Conditional(HasLoc):
     left: Expression
     middle: Expression
     right: Expression
@@ -1312,7 +1386,7 @@ Note: Making this _not_ a type is important or pydantic cries about a circular  
 """
 
 
-class Fancy_Assignment(BaseModel):
+class Fancy_Assignment(HasLoc):
     type: lexer.Fancy_Assignment_Ops
     lhs: LValue
     rhs: Expression
@@ -1337,10 +1411,16 @@ class Fancy_Assignment(BaseModel):
         def get_bin_op(op: Binary_Op_Without_Assignment):
             return Expression(
                 type=None,
+                location=self.location,
                 root=BinaryOp(
                     op=op,
-                    lhs=Expression(root=Factor(root=lhs, type=None), type=None),
+                    lhs=Expression(
+                        root=Factor(root=lhs, type=None, location=self.location),
+                        type=None,
+                        location=self.location,
+                    ),
                     rhs=rhs,
+                    location=self.location,
                 ),
             )
 
@@ -1369,18 +1449,28 @@ class Fancy_Assignment(BaseModel):
         return Normal_Assignment(
             lhs=lhs,
             rhs=rhs,
+            location=self.location,
         )
 
 
 class Identifier(RootModel[str]):
+    _location: lexer.Location = lexer.Location(0, 0)
+
+    @property
+    def location(self):
+        return self._location
+
     @staticmethod
     def from_tokens(token: lexer.Token_Lexed):
-        ltoken, identifier, _ = token
-        assert ltoken == "IDENTIFIER", "Not an identifier!"
+        ltoken, identifier, loc = token
+        if ltoken != "IDENTIFIER":
+            raise ParseError(loc, "Not an identifier!")
         # TODO(Joaquim): Add asserts for forbidden identifiers
         # Stoping stuff like `True = False`
         # Use pydantic
-        return Identifier(identifier)
+        id = Identifier(identifier)
+        id._location = loc
+        return id
 
     @t.override
     def __str__(self):
@@ -1423,10 +1513,8 @@ class Switch(Labelled_Construct):
         closing_parens = get_closing(tokens, ")")
         exp_tokens, rest = tokens[:closing_parens], tokens[closing_parens + 1 :]
         checker = Expression.from_tokens(exp_tokens, assert_no_food_left=True)
-        stmt = Statement.from_tokens(rest)
-        assert stmt is not None, "No body!"
-        body, rest = stmt
-        return Switch(checker=checker, body=body), rest
+        body, rest = Statement.from_tokens(rest)
+        return Switch(checker=checker, body=body, location=tokens[0][2]), rest
 
     @t.override
     def __str__(self):
@@ -1478,7 +1566,7 @@ class SwitchCase(Labelled_Construct):
 
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[SwitchCase, lexer.Lexed]:
-        (keyword, *_), *rest = tokens
+        (keyword, _, loc), *rest = tokens
         assert keyword in ("DEFAULT_KEYWORD", "CASE_KEYWORD"), (
             "This should have been caught earlier brother!"
         )
@@ -1493,7 +1581,7 @@ class SwitchCase(Labelled_Construct):
 
         body, rest = Statement.from_tokens(rest)
 
-        return SwitchCase(type=type, body=body), rest
+        return SwitchCase(type=type, body=body, location=loc), rest
 
 
 def _next_is(tokens: lexer.Lexed, which: lexer.Token):
@@ -1501,6 +1589,8 @@ def _next_is(tokens: lexer.Lexed, which: lexer.Token):
         (next, *_), *rest = tokens
         assert next == which
     except Exception as e:
+        if tokens:
+            raise ParseError(tokens[0][2], "Missing {which} bro!") from e
         raise AssertionError(f"Missing {which} bro!") from e
     return rest
 
@@ -1532,15 +1622,31 @@ def get_closing(
 
     number_of_open = 1 if consumed_opening_symbol else 0
     number_of_closed = 0
-    for index, (_, lexed, _) in enumerate(tokens):
+    for index, (_, lexed, loc) in enumerate(tokens):
         if lexed not in (closing_symbol, open_symbol):
             continue
         if lexed == open_symbol:
             number_of_open += 1
             continue
         number_of_closed += 1
-        assert number_of_open, "We closed without ever finding the opening symbol!"
+        if not number_of_open:
+            raise ParseError(loc, "We closed without ever finding the opening symbol!")
         if number_of_closed == number_of_open:
             return index
 
-    raise ValueError(f"Where's the '{closing_symbol}' brother?")
+    raise ParseError(tokens[0][2], f"Where's the '{closing_symbol}' brother?")
+
+
+class ParseError(ValueError):
+    def __init__(self, location: lexer.Location, msg: str, context: int = 2):
+        txt = [
+            msg,
+            f"{lexer.FILENAME.get()}:{location.lineno}",
+            "```c",
+            *lexer.POST_PRE_COMPILED.get()[
+                max(location.lineno - context, 0) : location.lineno + context + 1
+            ],
+            "```",
+        ]
+
+        super().__init__("\n".join(txt))

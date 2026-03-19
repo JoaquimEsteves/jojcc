@@ -1,3 +1,9 @@
+"""
+TODO(Joaquim): Add the location back after the `resolve` phase
+Easiest solution is to remove the optional part from the `HasLoc` class
+
+"""
+
 import typing as t
 from contextlib import contextmanager, suppress
 from contextvars import ContextVar
@@ -71,7 +77,7 @@ class Identifier_Table(BaseModel):
                 err = None
 
         if err:
-            raise AssertionError(err)
+            raise SemanticError(decl.location, err)
 
     def valid_function_declaration(self, func: parser.Function_Declaration):
         name = func.name.root
@@ -303,9 +309,11 @@ class Label_Map(BaseModel):
                         match_stmt(b)
                 case parser.Goto(label=label):
                     requested_labels.add(label.root)
-                case parser.Label(label=label, statement=inner):
+                case parser.Label(label=label, statement=inner, location=location):
                     if label.root in found_labels:
-                        raise ValueError(f"Label {item} declared multiple times!")
+                        raise SemanticError(
+                            location, f"Label {item} declared multiple times!"
+                        )
                     found_labels.add(label.root)
                     match_stmt(inner)
                 case parser.ReturnStatement() | parser.Expression() | "nope":
@@ -320,8 +328,9 @@ class Label_Map(BaseModel):
             match_stmt(item)
 
         if requested_labels - found_labels != set():
-            raise ValueError(
-                f"Missing some requested labels!\n{found_labels=}\n{requested_labels=}"
+            raise SemanticError(
+                func.location,
+                f"Missing some requested labels!\n{found_labels=}\n{requested_labels=}",
             )
 
 
@@ -507,7 +516,10 @@ def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
             return None
         case parser.Variable_Declaration():
             decl = resolve_declaration(for_init)
-            assert decl.storage is None, "No external/static in for loops nerd!"
+            if decl.storage is not None:
+                raise SemanticError(
+                    for_init.location, "No external/static in for loops nerd!"
+                )
             return decl
         case parser.Expression():
             return resolve_expression(for_init)
@@ -559,11 +571,11 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
 
         case parser.Break():
             if not (control_label := _get_control_label()):
-                raise ValueError("No control label found!")
+                raise SemanticError(stmt.location, "No control label found!")
             return parser.Statement(root=parser.Break(control_label=control_label))
         case parser.Continue():
             if not (control_label := _get_control_label("loop")):
-                raise ValueError("No control label found!")
+                raise SemanticError(stmt.location, "No control label found!")
             return parser.Statement(root=parser.Continue(control_label=control_label))
         case parser.For(init=init, condition=condition, post=post, body=body):
             with (
@@ -657,7 +669,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             )
         case parser.SwitchCase(type=type, body=body):
             if not (control_label := _get_control_label("switch")):
-                raise ValueError("No control label found!")
+                raise SemanticError(stmt.location, "No control label found!")
             # Note: That we check that all of the cases are correct in the type-check phase
             # We have to coerce the switch-cases into a `const-expression` anyway,
             # this const-expression coersion is best done on the type-checker
@@ -705,8 +717,9 @@ def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
                         ),
                     )
                 case _:
-                    raise ValueError(
-                        f"This {lvalue} does not look like an lvalue to me!"
+                    raise SemanticError(
+                        lvalue.location,
+                        f"This {lvalue} does not look like an lvalue to me!",
                     )
 
 
@@ -779,7 +792,7 @@ def resolve_identifier(
         if isinstance(where_to_check, Label_Map):
             resolved_name = where_to_check.get_new_name(name)
         else:
-            raise ValueError(f"Identifier {name} not found!")
+            raise SemanticError(identifier.location, f"Identifier {name} not found!")
 
     return parser.Identifier(root=resolved_name)
 
@@ -912,6 +925,9 @@ def type_check_function(func: parser.Function_Declaration):
     has_body = func.body is not None
     name = func.name.root
 
+    def nope(s: str):
+        return SemanticError(func.location, s)
+
     if name not in symbol_table:
         already_defined = False
         is_global = func.storage != "static"
@@ -919,19 +935,19 @@ def type_check_function(func: parser.Function_Declaration):
         # Shoot. Let's go through the checklist
         old = symbol_table.data[name]
         if not isinstance(old, Symbol_Table.Func):
-            raise ValueError("This mfer is a variable yo")
+            raise nope("This mfer is a variable yo")
+
         already_defined = old.defined
 
         if already_defined and has_body:
-            raise ValueError("Tried to define a function twice!")
+            raise nope("function twice!")
 
         if old.type.return_type != func.type.return_type:
-            raise ValueError("Conflicting types bro!")
+            raise nope("Conflicting types bro!")
         if old.type.params != func.type.params:
-            raise ValueError("Conflicting types bro!")
-
+            raise nope("Conflicting types bro!")
         if old.is_global and func.storage == "static":
-            raise ValueError("Static function declaration follows non-static")
+            raise nope("Static function declaration follows non-static")
 
         is_global = old.is_global
 
@@ -972,10 +988,13 @@ def type_check_block_item(item: parser.Block_Item):
 def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
     symbol_table = SYMBOL_TABLE.get()
 
+    def nope(s: str):
+        return SemanticError(decl.location, s)
+
     match decl.storage:
         case "extern":
             if decl.init:
-                raise ValueError("Initializer on local extern variable declaration!")
+                raise nope("Initializer on local extern variable declaration!")
             symbol_table.assert_declaration_has_type_match(decl)
             if decl.name not in symbol_table:
                 symbol_table.data[decl.name.root] = Symbol_Table.Static(
@@ -998,9 +1017,8 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
             )
 
         case None:
-            assert decl.name.root not in symbol_table, (
-                "Compiler bug! The identifier map messed up brother"
-            )
+            if decl.name.root in symbol_table:
+                raise nope("Compiler bug! The identifier map messed up brother")
             symbol_table.data[decl.name.root] = Symbol_Table.Local(type=decl.type)
 
             if decl.init:
@@ -1011,13 +1029,16 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
     initial_value: t.Literal["tentative", "Nope!"] | Symbol_Table.Static.StaticInit
     symbol_table = SYMBOL_TABLE.get()
 
+    def nope(s: str):
+        return SemanticError(decl.location, s)
+
     match decl.init, decl.storage:
         case None, "extern":
             initial_value = "Nope!"
         case None, _:
             initial_value = "tentative"
         case parser.Expression(), "extern":
-            raise ValueError("This should have been caught earlier no?")
+            raise nope("This should have been caught earlier no?")
         case parser.Expression(), _:
             initial_value = Symbol_Table.Static.StaticInit.from_declaration(
                 decl, mutate=True
@@ -1053,7 +1074,7 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
         # JANK ALERT
         match old.initial_value, initial_value:
             case Symbol_Table.Static.StaticInit(), Symbol_Table.Static.StaticInit():
-                raise ValueError(f"Conflict! Double declaration of '{decl.name.root}'")
+                raise nope(f"Conflict! Double declaration of '{decl.name.root}'")
             case Symbol_Table.Static.StaticInit(), _:
                 # perfectly valid...still jank
                 initial_value = old.initial_value
@@ -1079,6 +1100,9 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
 def type_check_expression(exp: parser.Expression | parser.Factor):
     symbol_table = SYMBOL_TABLE.get()
 
+    def nope(s: str):
+        return SemanticError(exp.location, s)
+
     match exp.root:
         case parser.Identifier(root=name):
             exp_type = type_check_identifier_is_not_function(exp.root)
@@ -1086,7 +1110,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, parser.CType.FuncType):
-                raise TypeError()
+                raise nope(f"{name} is not a function!")
             new_args: list[parser.Expression] = []
             assert len(old.type.params) == len(args), "Wrong number of arguments bro!"
             for param, current_arg in zip(old.type.params, args, strict=True):
@@ -1172,7 +1196,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             exp.type = target_type
 
     if exp.type is None:
-        raise ValueError("exp should have a type at this stage!")
+        raise nope("exp should have a type at this stage!")
 
 
 def type_check_identifier_is_not_function(
@@ -1265,6 +1289,9 @@ def type_check_statement(stmt: parser.Statement):
             type_check_statement(statement)
         case "nope" | parser.Break() | parser.Continue() | parser.Goto():
             pass
+
+
+class SemanticError(parser.ParseError): ...
 
 
 ###############################################################################

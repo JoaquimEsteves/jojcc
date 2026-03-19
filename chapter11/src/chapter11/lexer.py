@@ -1,20 +1,31 @@
+from contextvars import ContextVar
+from pathlib import Path
 import re
 import typing as t
 
 from shared import data_types as dt
 from shared.pure_functions import get_literal_vals
 
+POST_PRE_COMPILED: ContextVar[list[str]] = ContextVar("POST_PRE_COMPILED", default=None)  # pyright: ignore[reportAssignmentType]
+"""
+We need to store this nerd in some sort of global so that other sections of the
+code can point to it whenever there's a mistake
+"""
+FILENAME: ContextVar[str] = ContextVar("FILE_NAME", default="<anonymous.c>")
 
-def lex(input: str):
+
+class Location(t.NamedTuple):
+    charno: dt.uInt
+    lineno: dt.uInt
+
+
+def lex(input: str, filename: Path | None = None):
+    _ = POST_PRE_COMPILED.set(input.split("\n"))
+    if filename:
+        _ = FILENAME.set(str(filename))
     lexed: Lexed = []
     charno = 0
-    """
-    The charno is STILL wrong.
-    I tweaked it, but the problem is that we get a pre-processed C-file.
-    So comments/includes/macros go out of the window.
-
-    ...dammit
-    """
+    lines = {i: m.start() for i, m in enumerate(i for i in re.finditer(r"\n", input))}
 
     def inner(current: str, charno: dt.CharNo):
         for token, regex in TOKEN_REGEX.items():
@@ -28,7 +39,13 @@ def lex(input: str):
                 found = found.lstrip()
             else:
                 tweaked_charno = charno
-            lexed.append((token, found, tweaked_charno))
+            line: int | None = None
+            for lineno in lines:
+                if charno <= lines[lineno]:
+                    line = lineno
+                    break
+            assert line is not None
+            lexed.append((token, found, Location(tweaked_charno, line)))
             return current[match.end() :], charno + match.end()
         raise ValueError("Syntax Error")
 
@@ -38,7 +55,7 @@ def lex(input: str):
     return lexed
 
 
-type Token_Lexed = tuple[Token, str, dt.CharNo]
+type Token_Lexed = tuple[Token, str, Location]
 type Lexed = list[Token_Lexed]
 
 WHITESPACE = re.compile(r"\s*")
