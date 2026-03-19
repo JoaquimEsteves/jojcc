@@ -430,7 +430,7 @@ class Expression(BaseModel):
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
                     left = BinaryOp(
-                        type=operator,  # pyright: ignore[reportArgumentType]
+                        type=operator,
                         lhs=Expression(type=left),
                         rhs=rhs,
                     )
