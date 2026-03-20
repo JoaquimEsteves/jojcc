@@ -65,13 +65,9 @@ from contextlib import suppress
 
 import shared.data_types as dt
 import shared.pure_functions as pf
-from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validator
+from pydantic import AfterValidator, BaseModel, Field, RootModel
 
 from chapter11 import lexer
-
-
-class HasLoc(BaseModel):
-    location: lexer.Location = Field(default_factory=lexer.CURRENT_LOCATION.get)
 
 
 class Program(BaseModel):
@@ -92,6 +88,70 @@ class Program(BaseModel):
     @t.override
     def __str__(self):
         return "\n".join(map(str, self.declarations))
+
+
+def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed]:
+    assert len(tokens) >= 3, "not enough tokens mannn!"
+
+    (ctype, storage), rest = Specifiers.from_tokens(tokens)
+    identifier, *rest = rest
+
+    name = Identifier.from_tokens(identifier)
+
+    (next_token, _, loc), *rest = rest
+    _ = lexer.CURRENT_LOCATION.set(loc)
+    match next_token:
+        case "=":
+            exp, rest = Expression.from_tokens(rest)
+            return (
+                Variable_Declaration(
+                    type=ctype,
+                    name=name,
+                    init=exp,
+                    storage=storage,
+                ),
+                _next_is_semicolon(rest),
+            )
+        case "SEMICOLON":
+            return (
+                Variable_Declaration(
+                    type=ctype,
+                    name=name,
+                    storage=storage,
+                    init=None,
+                ),
+                rest,
+            )
+        case "OPEN_PARENS":
+            # It's a function
+            closing_paren = get_closing(rest, ")", consumed_opening_symbol=True)
+            param_list = Function_Declaration.get_param_list(rest[: closing_paren + 1])
+            (next_token, *_), *rest = rest[closing_paren + 1 :]
+            if next_token == "{":  # }
+                closing_bracket_index = get_closing(rest, "}")
+                body = Block.from_tokens(rest[:closing_bracket_index])
+                rest = rest[closing_bracket_index + 1 :]
+            else:
+                assert next_token == "SEMICOLON", (
+                    f"Nope, function must look like: {Function_Declaration.__doc__}"
+                )
+                body = None
+
+            return (
+                Function_Declaration(
+                    type=CType.FuncType(
+                        return_type=ctype,
+                        params=[p.type for p in param_list],
+                    ),
+                    name=name,
+                    body=body,
+                    param_list=[p.name for p in param_list],
+                    storage=storage,
+                ),
+                rest,
+            )
+        case _:
+            raise ParseError(loc, "Syntax error!")
 
 
 @t.final
@@ -178,68 +238,8 @@ class Specifiers:
         return (types[0], storage_class), tokens
 
 
-def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed]:
-    assert len(tokens) >= 3, "not enough tokens mannn!"
-
-    (ctype, storage), rest = Specifiers.from_tokens(tokens)
-    identifier, *rest = rest
-
-    name = Identifier.from_tokens(identifier)
-
-    (next_token, _, loc), *rest = rest
-    _ = lexer.CURRENT_LOCATION.set(loc)
-    match next_token:
-        case "=":
-            exp, rest = Expression.from_tokens(rest)
-            return (
-                Variable_Declaration(
-                    type=ctype,
-                    name=name,
-                    init=exp,
-                    storage=storage,
-                ),
-                _next_is_semicolon(rest),
-            )
-        case "SEMICOLON":
-            return (
-                Variable_Declaration(
-                    type=ctype,
-                    name=name,
-                    storage=storage,
-                    init=None,
-                ),
-                rest,
-            )
-        case "OPEN_PARENS":
-            # It's a function
-            closing_paren = get_closing(rest, ")", consumed_opening_symbol=True)
-            param_list = Function_Declaration.get_param_list(rest[: closing_paren + 1])
-            (next_token, *_), *rest = rest[closing_paren + 1 :]
-            if next_token == "{":  # }
-                closing_bracket_index = get_closing(rest, "}")
-                body = Block.from_tokens(rest[:closing_bracket_index])
-                rest = rest[closing_bracket_index + 1 :]
-            else:
-                assert next_token == "SEMICOLON", (
-                    f"Nope, function must look like: {Function_Declaration.__doc__}"
-                )
-                body = None
-
-            return (
-                Function_Declaration(
-                    type=CType.FuncType(
-                        return_type=ctype,
-                        params=[p.type for p in param_list],
-                    ),
-                    name=name,
-                    body=body,
-                    param_list=[p.name for p in param_list],
-                    storage=storage,
-                ),
-                rest,
-            )
-        case _:
-            raise ParseError(loc, "Syntax error!")
+class HasLoc(BaseModel):
+    location: lexer.Location = Field(default_factory=lexer.CURRENT_LOCATION.get)
 
 
 class Function_Declaration(HasLoc):
@@ -833,28 +833,22 @@ class Typed(BaseModel):
 class Expression(Typed, HasLoc):
     """
     <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
+    <factor> ::= <const>
+      | <identifier>
+      | "(" {<type-specifier>}+ ")" <factor>
+      | <unop> <factor>
+      | <factor> <postop>
+      | "(" <exp> ")"
+      | <identifier> '(' [<argument-list>] ')'
     """
 
+    type FactorSubType = Constant | Unary | Identifier | Func_Call | Cast
+
     type SubType = (
-        BinaryOp | Factor | Fancy_Assignment | Normal_Assignment | Conditional
+        BinaryOp | FactorSubType | Fancy_Assignment | Normal_Assignment | Conditional
     )
+
     root: SubType
-
-    @model_validator(mode="after")
-    def fix_paren_jank(self):
-        """
-        Fixes situations like:
-
-        ```c
-        int a = ((((((((2))))))));
-        ```
-        """
-        match self.root:
-            case Factor(root=Expression(root=inner)):
-                self.root = inner
-            case _:
-                pass
-        return self
 
     def is_const_expression(self):
         """
@@ -876,16 +870,15 @@ class Expression(Typed, HasLoc):
 
         def get_val() -> Constant:
             match self.root:
-                case Factor(root=Constant()):
+                case Constant():
                     # I don't understand why this guy is bugging out here
-                    res: Constant = self.root.root  # pyright: ignore[reportAssignmentType]
+                    res: Constant = self.root
 
                     # 1. We shouldn't mutate
                     # 2. This should be done bellow in cast_val
                     # But cast-val is being a dick
                     if mutate and cast_to:
                         self.type = CType.from_trivial(cast_to)
-                        self.root.type = CType.from_trivial(cast_to)
                         res.ctype = CType(root=cast_to)
 
                     return res
@@ -907,10 +900,7 @@ class Expression(Typed, HasLoc):
     @staticmethod
     def from_constant(const: int, ctype: TrivialType):
         return Expression(
-            root=Factor(
-                root=Constant(root=const, ctype=ctype),
-                type=ctype,
-            ),
+            root=Constant(root=const, ctype=ctype),
             type=ctype,
         )
 
@@ -919,11 +909,9 @@ class Expression(Typed, HasLoc):
         """
         In practise the CType should never be none
         """
+        assert type is not None, "Compiler error yo!"
         return Expression(
-            root=Factor(
-                root=Identifier(name),
-                type=type,
-            ),
+            root=Identifier(name),
             type=type,
         )
 
@@ -956,7 +944,8 @@ class Expression(Typed, HasLoc):
         def inner(
             tokens: lexer.Lexed, min_prec: int = 0
         ) -> tuple[Expression, lexer.Lexed]:
-            left, right = Factor.parse(tokens)
+            left: Expression
+            left, right = Expression.parse_factor(tokens)
             _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
             while right:
                 (operator, _identifier, _), *rest = right
@@ -971,11 +960,11 @@ class Expression(Typed, HasLoc):
                 if operator in ("++", "--"):
                     # shit, I hate these nerds
                     other_rest = rest
-                    left = Factor(
+                    left = Expression(
                         type=None,
                         root=Unary(
                             op=operator,
-                            exp=left,  # pyright: ignore[reportArgumentType]
+                            exp=left,
                             pre=False,
                         ),
                     )
@@ -986,11 +975,14 @@ class Expression(Typed, HasLoc):
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
-                    identifier = Expression(root=left, type=None)
-                    left = (
-                        Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
-                        if operator != "="
-                        else Normal_Assignment(lhs=identifier, rhs=rhs)
+                    identifier = left
+                    left = Expression(
+                        type=None,
+                        root=(
+                            Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
+                            if operator != "="
+                            else Normal_Assignment(lhs=identifier, rhs=rhs)
+                        ),
                     )
                 elif operator == "?":
                     middle, rhs = inner(rest, 0)
@@ -998,23 +990,29 @@ class Expression(Typed, HasLoc):
                     if colon != ":":
                         raise ParseError(loc, "BAD IF EXPRESSION")
                     right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
-                    left = Conditional(
-                        left=Expression(root=left, type=None),
-                        middle=middle,
-                        right=right,
+                    left = Expression(
+                        type=None,
+                        root=Conditional(
+                            left=left,
+                            middle=middle,
+                            right=right,
+                        ),
                     )
 
                 else:
                     # Don't quite understand this +1 if I must be honest
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
-                    left = BinaryOp(
-                        op=operator,  # pyright: ignore[reportArgumentType]
-                        lhs=Expression(root=left, type=None),
-                        rhs=rhs,
+                    left = Expression(
+                        type=None,
+                        root=BinaryOp(
+                            op=operator,  # pyright: ignore[reportArgumentType]
+                            lhs=left,
+                            rhs=rhs,
+                        ),
                     )
                 right = other_rest
 
-            return Expression(root=left, type=None), right
+            return left, right
 
         exp, rest = inner(tokens, min_prec)
         if assert_no_food_left:
@@ -1022,6 +1020,70 @@ class Expression(Typed, HasLoc):
                 raise ParseError(rest[0][2], "We left food on the table!")
             return exp
         return exp, rest
+
+    @staticmethod
+    def parse_factor(tokens: lexer.Lexed) -> tuple[Expression, lexer.Lexed]:
+        """
+        Factors are a sub-type of expression
+        """
+        (token, identifier, charno), *rest = tokens
+        _ = lexer.CURRENT_LOCATION.set(charno)
+        match token:
+            case "IDENTIFIER":
+                ident = Identifier.from_tokens((token, identifier, charno))
+                if not rest or rest[0][0] != "OPEN_PARENS":
+                    # It's just an identifier
+                    return (
+                        Expression(root=ident, type=None),
+                        rest,
+                    )
+
+                _, *rest = rest
+                corresponding_closed = get_closing(rest, ")")
+                arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
+
+                return (
+                    Expression(
+                        root=Func_Call(name=ident, args=arg_list),
+                        type=None,
+                    ),
+                    rest[corresponding_closed + 1 :],
+                )
+            case "CONSTANT" | "LONG_CONSTANT":
+                return (
+                    Expression(
+                        root=Constant.from_token(
+                            (token, identifier, charno),  # pyright: ignore[reportArgumentType]
+                        ),
+                        type=None,
+                    ),
+                    rest,
+                )
+            case "OPEN_PARENS":
+                if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
+                    # shoot, it's a cast!
+                    cast, rest = Cast.from_tokens(rest)
+                    return Expression(root=cast, type=None), rest
+                corresponding_closed = get_closing(rest, ")")
+                return (
+                    Expression.from_tokens(
+                        rest[:corresponding_closed], assert_no_food_left=True
+                    ),
+                    rest[corresponding_closed + 1 :],
+                )
+
+            case "COMPLEMENT" | "MINUS" | "NOT" | "++" | "--":
+                exp, rest = Expression.parse_factor(rest)
+                return (
+                    Expression(
+                        type=None,
+                        root=Unary(op=token, exp=exp),
+                    ),
+                    rest,
+                )
+            case _:
+                pass
+        raise ParseError(charno, f"Syntax Error, unknown {token=}")
 
 
 class Constant(HasLoc):
@@ -1079,92 +1141,6 @@ class Constant(HasLoc):
                 return val
 
 
-class Factor(Typed, HasLoc):
-    """
-    The name `factor` comes from the fact that this symbol can appear as a
-    _factor_ in a multiplication expression.
-
-    TODO(Joaquim): Get _rid_ of this class.
-
-    Instead there would be two functions for parsing expressions.
-    """
-
-    type SubType = Constant | Unary | Expression | Identifier | Func_Call | Cast
-    root: SubType
-
-    @t.override
-    def __str__(self):
-        match self.root:
-            case Constant(root=root):
-                return str(root)
-            case _:
-                return str(self.root)
-
-    @staticmethod
-    def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
-        (token, identifier, charno), *rest = tokens
-        _ = lexer.CURRENT_LOCATION.set(charno)
-        match token:
-            case "IDENTIFIER":
-                ident = Identifier.from_tokens((token, identifier, charno))
-                if not rest or rest[0][0] != "OPEN_PARENS":
-                    # It's just an identifier
-                    return (
-                        Factor(root=ident, type=None),
-                        rest,
-                    )
-
-                _, *rest = rest
-                corresponding_closed = get_closing(rest, ")")
-                arg_list = Func_Call.args_from_tokens(rest[:corresponding_closed])
-
-                return (
-                    Factor(
-                        root=Func_Call(name=ident, args=arg_list),
-                        type=None,
-                    ),
-                    rest[corresponding_closed + 1 :],
-                )
-            case "CONSTANT" | "LONG_CONSTANT":
-                return (
-                    Factor(
-                        root=Constant.from_token(
-                            (token, identifier, charno),  # pyright: ignore[reportArgumentType]
-                        ),
-                        type=None,
-                    ),
-                    rest,
-                )
-            case "OPEN_PARENS":
-                if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
-                    # shoot, it's a cast!
-                    cast, rest = Cast.from_tokens(rest)
-                    return Factor(root=cast, type=None), rest
-                corresponding_closed = get_closing(rest, ")")
-                return (
-                    Factor(
-                        root=Expression.from_tokens(
-                            rest[:corresponding_closed], assert_no_food_left=True
-                        ),
-                        type=None,
-                    ),
-                    rest[corresponding_closed + 1 :],
-                )
-
-            case "COMPLEMENT" | "MINUS" | "NOT" | "++" | "--":
-                exp, rest = Factor.parse(rest)
-                return (
-                    Factor(
-                        type=None,
-                        root=Unary(op=token, exp=exp),
-                    ),
-                    rest,
-                )
-            case _:
-                pass
-        raise ParseError(charno, f"Syntax Error, unknown {token=}")
-
-
 class Func_Call(HasLoc):
     name: Identifier
     args: list[Expression]
@@ -1219,7 +1195,7 @@ class Unary(HasLoc):
         "--",
         "++",
     ]
-    exp: Factor
+    exp: Expression
     pre: bool = True
 
     @t.override
@@ -1361,7 +1337,7 @@ class Conditional(HasLoc):
         return f"{res}{body})"
 
 
-LValue = t.Annotated["Expression | Identifier", "FIX ME LATER"]
+LValue = t.Annotated["Expression", "FIX ME LATER"]
 """
 This is wrong - not everything can be an lvalue But for some reason _THE BOOK_
 wants me to "just accept" expressions here and to see if they're a valid LValue
@@ -1403,10 +1379,7 @@ class Fancy_Assignment(HasLoc):
                 type=None,
                 root=BinaryOp(
                     op=op,
-                    lhs=Expression(
-                        root=Factor(root=lhs, type=None),
-                        type=None,
-                    ),
+                    lhs=lhs,
                     rhs=rhs,
                 ),
             )

@@ -91,8 +91,8 @@ class stfu[T: BaseException](AbstractContextManager[list[T]]):
         self.caught: list[T] = []
         self._exceptions = exceptions
 
-    @t.override
-    def __enter__(self):  # pyright: ignore[reportIncompatibleMethodOverride]
+    # The lsp and the `basedpyright` command get this confused
+    def __enter__(self):  # pyright: ignore[reportImplicitOverride]
         _ = super().__enter__()
         return self.caught
 

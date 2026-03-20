@@ -78,7 +78,7 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
                 )
             else:
                 checker_expr = parser.Expression(
-                    root=parser.Factor(root=checker_res, type=checker.type),
+                    root=checker_res,
                     type=checker.type,
                 )
 
@@ -222,7 +222,7 @@ def _match_statement(stmt: parser.Statement, instructions: list[Instruction]) ->
 
 
 def emit_exp(
-    exp: parser.Expression | parser.Factor,
+    exp: parser.Expression,
     instructions: list[Instruction],
 ) -> Value:
     match exp.root:
@@ -240,8 +240,6 @@ def emit_exp(
                 inst = Truncate(src=res, dest=destination)
             instructions.append(inst)
             return destination
-        case parser.Factor() | parser.Expression():
-            return emit_exp(exp.root, instructions)
         case parser.Identifier(root=name):
             return Var.new(type=exp.type, name=name)
         case parser.Constant():
@@ -265,12 +263,7 @@ def emit_exp(
 
         case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
             match lhs:
-                case (
-                    parser.Identifier(root=name)
-                    | parser.Expression(
-                        root=parser.Factor(root=parser.Identifier(root=name))
-                    )
-                ):
+                case parser.Expression(root=parser.Identifier(root=name)):
                     return emit_copy_exp(
                         Var.new(type=exp.type, name=name), rhs, instructions
                     )
@@ -330,11 +323,8 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
 
     # Note - at this stage this factor _MUST_ be an lvalue
     # Semantic analysis handles that for us
-    lhs = parser.Expression(root=factor, type=type)
-    rhs = parser.Expression(
-        root=parser.Factor(root=parser.Constant(root=1, ctype=type), type=type),
-        type=type,
-    )
+    lhs = factor
+    rhs = parser.Expression(root=parser.Constant(root=1, ctype=type), type=type)
     intermediate_exp = parser.Expression(
         type=type,
         root=parser.BinaryOp(

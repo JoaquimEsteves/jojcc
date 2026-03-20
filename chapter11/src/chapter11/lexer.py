@@ -47,12 +47,11 @@ def lex(pre_processed: str, filename: Path | None = None):
                 found = found.lstrip()
             else:
                 tweaked_charno = charno
-            line: int | None = None
+            line: int = 0
             for lineno in lines:
                 if tweaked_charno <= lines[lineno]:
                     line = lineno
                     break
-            assert line is not None
             lexed.append((token, found, Location(tweaked_charno, line)))
             # We have to pass the original charno
             return current[match.end() :], charno + match.end()

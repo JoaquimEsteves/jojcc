@@ -379,7 +379,6 @@ MOST_RECENT_CONTROL_LABEL: ContextVar[ContextVar[str] | None] = ContextVar(
 """
 Where do those damn breaks apply to
 """
-IS_TOP_LEVEL: ContextVar[bool] = ContextVar("IS_TOP_LEVEL", default=True)
 SYMBOL_TABLE = ContextVar("SYMBOL_TABLE", default=Symbol_Table())
 """
 The book mentions that the symbol-table is de-facto a global, but I still made
@@ -472,6 +471,7 @@ def resolve_function_declaration(func: parser.Function_Declaration):
     id_table.add_external(func)
 
     _ = lexer.CURRENT_LOCATION.set(func.location)
+    is_top_level = id_table.scope == 0
 
     # We denote a new scope, because `int a(int a);` is valid
     with Identifier_Table.new_scope():
@@ -488,12 +488,13 @@ def resolve_function_declaration(func: parser.Function_Declaration):
         ]
 
         if func.body:
-            assert IS_TOP_LEVEL.get(), "No clojures nerd!"
+            if not is_top_level:
+                raise SemanticError(func.location, "No clojures nerd!")
             # Note - that we're in the same scope.
             # int foo(int a) { int a = 2; }
             # is ILLEGAL
-            with pf.set_context(IS_TOP_LEVEL, val=False):
-                body = resolve_block(func.body)
+            # with pf.set_context(IS_TOP_LEVEL, val=False):
+            body = resolve_block(func.body)
         else:
             body = None
 
@@ -718,21 +719,16 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
 def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
     _ = lexer.CURRENT_LOCATION.set(lvalue.location)
     match lvalue:
-        case parser.Identifier():
-            return resolve_identifier(lvalue, IDENTIFIER_TABLE.get())
         case parser.Expression():
             # shit...
             match lvalue.root:
-                case parser.Factor(root=parser.Identifier()):
-                    assert isinstance(lvalue.root.root, parser.Identifier)
-                    identifier: parser.Identifier = lvalue.root.root
+                case parser.Identifier():
+                    identifier: parser.Identifier = lvalue.root
                     return parser.Expression(
                         type=None,
-                        root=parser.Factor(
-                            type=None,
-                            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()),
-                        ),
+                        root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()),
                     )
+
                 case parser.Normal_Assignment(lhs=lhs, rhs=rhs):
                     return parser.Expression(
                         type=None,
@@ -751,8 +747,8 @@ def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
 
 
 def resolve_post_and_prefix_assignable(
-    identifier: parser.Identifier | parser.Expression | parser.Factor,
-):
+    exp: parser.Expression,
+) -> parser.Expression:
     """
     Everyone knows what an lvalue is right?
     But C also has this `not assignable`...idea
@@ -760,40 +756,28 @@ def resolve_post_and_prefix_assignable(
     I still DON'T know what is something that is not assignable
     I just know, that `++a++` is NOT assignable
     """
-    if isinstance(identifier, (parser.Expression, parser.Factor)):
-        current = identifier
-        # Solves situations like so:
-        # ((((((2))))))  # noqa: ERA001
-        #
-        # Note: This SHOULD have been taken care of before we hit this spot
-        # But just in case...
-        while hasattr(current, "root") and not isinstance(current.root, str):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownArgumentType, reportUnknownMemberType]
-            current = current.root  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
-        if isinstance(current, parser.Unary):
+    current = exp.root
+    match current:
+        case parser.Unary(op=op, exp=inner, pre=pre):
             # Postfix and pre-fix operators being a PITA as usual
             # This is a valid assignable value `~a++`
-            assert current.op not in ("++", "--")
+            assert op not in ("++", "--")
+
             return parser.Expression(
                 type=None,
-                root=parser.Factor(
-                    type=None,
-                    root=parser.Unary(
-                        op=current.op,
-                        exp=resolve_post_and_prefix_assignable(current.exp).root,  # pyright: ignore[reportArgumentType, reportUnknownArgumentType, reportUnknownMemberType]
-                        pre=current.pre,
-                    ),
+                root=parser.Unary(
+                    op=op,
+                    exp=resolve_post_and_prefix_assignable(inner),
+                    pre=pre,
                 ),
             )
-        assert isinstance(current, parser.Identifier), f"{current} is not assignable!"
-        identifier = current
-
-    return parser.Expression(
-        type=None,
-        root=parser.Factor(
-            type=None,
-            root=resolve_identifier(identifier, IDENTIFIER_TABLE.get()),
-        ),
-    )
+        case parser.Identifier():
+            return parser.Expression(
+                type=None,
+                root=resolve_identifier(current, IDENTIFIER_TABLE.get()),
+            )
+        case _:
+            raise SemanticError(exp.location, f"{current} is not assignable!")
 
 
 def resolve_goto_label(label: parser.Identifier):
@@ -826,54 +810,43 @@ def resolve_identifier(
     return parser.Identifier(root=resolved_name)
 
 
-def resolve_factor(factor: parser.Factor) -> parser.Factor:
+def resolve_factor(
+    factor: parser.Expression.FactorSubType,
+) -> parser.Expression.FactorSubType:
     _ = lexer.CURRENT_LOCATION.set(factor.location)
-    match factor.root:
+    match factor:
         case parser.Cast(target_type=target_type, exp=exp):
             # It feels really weird that we're checking here
             # I think I messed up my operator precedence somewhere
             assert not isinstance(
                 exp.root, (parser.Normal_Assignment, parser.Fancy_Assignment)
             ), "LValue bullshit"
-            return parser.Factor(
-                type=None,
-                root=parser.Cast(target_type=target_type, exp=resolve_expression(exp)),
-            )
+            return parser.Cast(target_type=target_type, exp=resolve_expression(exp))
+
         case parser.Constant():
             return factor
-        case parser.Expression():
-            return parser.Factor(
-                type=None,
-                root=resolve_expression(factor.root),
-            )
         case parser.Identifier():
-            return parser.Factor(
-                type=None, root=resolve_identifier(factor.root, IDENTIFIER_TABLE.get())
-            )
+            return resolve_identifier(factor, IDENTIFIER_TABLE.get())
         case parser.Unary(op=op, exp=exp, pre=pre):
             if op not in ("++", "--"):
-                return parser.Factor(
-                    type=None,
-                    root=parser.Unary(op=op, exp=resolve_factor(exp), pre=pre),
-                )
-            return parser.Factor(
-                type=None,
-                root=parser.Unary(
+                inner = resolve_expression(exp)
+                return parser.Unary(
                     op=op,
-                    exp=resolve_post_and_prefix_assignable(exp).root,  # pyright: ignore[reportArgumentType]
+                    exp=inner,
                     pre=pre,
-                ),
+                )
+            return parser.Unary(
+                op=op,
+                exp=resolve_post_and_prefix_assignable(exp),
+                pre=pre,
             )
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             identifier_table = IDENTIFIER_TABLE.get()
             assert identifier_table.valid_func_call(name), "Undeclared function!"
             new_name: str = identifier_table[name]  # pyright: ignore[reportAssignmentType]
-            return parser.Factor(
-                type=None,
-                root=parser.Func_Call(
-                    name=parser.Identifier(new_name),
-                    args=[resolve_expression(arg) for arg in args],
-                ),
+            return parser.Func_Call(
+                name=parser.Identifier(new_name),
+                args=[resolve_expression(arg) for arg in args],
             )
 
 
@@ -902,9 +875,6 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
                 parser.Expression(root=exp.root.to_normal_assignment(), type=None)
             )
 
-        case parser.Factor():
-            return parser.Expression(root=resolve_factor(exp.root), type=None)
-
         case parser.BinaryOp(lhs=lhs, rhs=rhs, op=op):
             return parser.Expression(
                 type=None,
@@ -914,6 +884,8 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
                     rhs=resolve_expression(rhs),
                 ),
             )
+        case _:
+            return parser.Expression(type=None, root=resolve_factor(exp.root))
 
 
 ###############################################################################
@@ -1128,7 +1100,7 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
     )
 
 
-def type_check_expression(exp: parser.Expression | parser.Factor):
+def type_check_expression(exp: parser.Expression):
     symbol_table = SYMBOL_TABLE.get()
 
     def nope(s: str):
@@ -1152,10 +1124,6 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             exp.type = old.type.return_type
             exp.root.args = new_args
 
-        case parser.Factor() | parser.Expression():
-            # Recursion...
-            type_check_expression(exp.root)
-            exp.type = exp.root.type
         case parser.BinaryOp(lhs=lhs, rhs=rhs, op=op):
             type_check_expression(lhs)
             type_check_expression(rhs)
@@ -1207,13 +1175,8 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
             parser.Fancy_Assignment(lhs=lhs, rhs=rhs)
             | parser.Normal_Assignment(lhs=lhs, rhs=rhs)
         ):
-            match lhs:
-                case parser.Expression():
-                    type_check_expression(lhs)
-                    typed_left = lhs.type
-                case parser.Identifier():
-                    old_type = type_check_identifier_is_not_function(lhs)
-                    typed_left = old_type
+            type_check_expression(lhs)
+            typed_left = lhs.type
             type_check_expression(rhs)
             new_rhs = _convert_to(rhs, typed_left)
             if new_rhs != rhs:
@@ -1334,10 +1297,7 @@ def _convert_to(exp: parser.Expression, type: parser.CType | None):
     assert type
     if exp.type == type:
         return exp
-    return parser.Expression(
-        root=parser.Factor(root=parser.Cast(target_type=type, exp=exp), type=type),
-        type=type,
-    )
+    return parser.Expression(root=parser.Cast(target_type=type, exp=exp), type=type)
 
 
 def _get_common_type(left: parser.CType | None, right: parser.CType | None):
