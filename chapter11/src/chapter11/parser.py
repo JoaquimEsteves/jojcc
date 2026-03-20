@@ -59,6 +59,7 @@ Notes:
 
 """
 
+import re
 import typing as t
 from contextlib import suppress
 
@@ -70,7 +71,7 @@ from chapter11 import lexer
 
 
 class HasLoc(BaseModel):
-    location: lexer.Location = lexer.Location(0, 0)
+    location: lexer.Location = Field(default_factory=lexer.CURRENT_LOCATION.get)
 
 
 class Program(BaseModel):
@@ -132,8 +133,12 @@ class Specifiers:
         ] = []  # it's a list, because `long int` and `long` and `int long` are equivalent
         storage_classes: list[Specifiers.Storage_Class] = []
 
+        if tokens:
+            _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
+
         while tokens:
             (next_token, token, loc), *rest = tokens
+            reset_token = lexer.CURRENT_LOCATION.set(loc)
             match next_token:
                 case "INT_KEYWORD" | "LONG_KEYWORD":
                     types.append(CType.from_token((next_token, token, loc)))
@@ -147,11 +152,13 @@ class Specifiers:
                     break
                 case _:
                     raise ParseError(loc, f"What is this {next_token=} doing here bro?")
+            lexer.CURRENT_LOCATION.reset(reset_token)
 
         # Technically - the types can be automatically inferred to be 'int'
         # But the book says to just enforce it
         # We also don't do `auto`
-        assert len(types) <= 2 and len(types) >= 1, "Bro!"
+        if len(types) > 2 or len(types) < 1:
+            raise ParseError(tokens[0][2], "Bro!")
 
         if len(types) == 2:
             # shit! It's weird but it's OK to define a long as
@@ -163,7 +170,8 @@ class Specifiers:
                 )
             types = [CType(root="long")]
 
-        assert len(storage_classes) <= 1, "BRO!"
+        if len(storage_classes) > 1:
+            raise ParseError(tokens[0][2], "BRO!")
 
         storage_class = None if not storage_classes else storage_classes[0]
 
@@ -179,6 +187,7 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
     name = Identifier.from_tokens(identifier)
 
     (next_token, _, loc), *rest = rest
+    _ = lexer.CURRENT_LOCATION.set(loc)
     match next_token:
         case "=":
             exp, rest = Expression.from_tokens(rest)
@@ -188,7 +197,6 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     name=name,
                     init=exp,
                     storage=storage,
-                    location=loc,
                 ),
                 _next_is_semicolon(rest),
             )
@@ -199,7 +207,6 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     name=name,
                     storage=storage,
                     init=None,
-                    location=loc,
                 ),
                 rest,
             )
@@ -228,7 +235,6 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
                     body=body,
                     param_list=[p.name for p in param_list],
                     storage=storage,
-                    location=loc,
                 ),
                 rest,
             )
@@ -282,6 +288,7 @@ class Function_Declaration(HasLoc):
         res: list[Variable_Declaration] = []
         rest: lexer.Lexed = tokens
         while rest:
+            _ = lexer.CURRENT_LOCATION.set(rest[0][2])
             if rest[0][0] == "VOID_KEYWORD":
                 # special case
                 rest = _next_is(rest[1:], "CLOSE_PARENS")
@@ -300,7 +307,6 @@ class Function_Declaration(HasLoc):
                     name=identifier,
                     storage=None,
                     init=None,
-                    location=rest[0][2],
                 )
             )
 
@@ -425,6 +431,7 @@ class For(Labelled_Construct):
     @staticmethod
     def from_tokens(tokens: lexer.Lexed):
         rest = _next_is(tokens, "OPEN_PARENS")
+        _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
 
         first_closing = get_closing(rest, ";")
         # We _want_ to include the closing `;`
@@ -455,16 +462,13 @@ class For(Labelled_Construct):
 
         body, rest = Statement.from_tokens(rest)
 
-        loc = tokens[0][2]
         return Statement(
             root=For(
                 init=init_exp,
                 condition=condition_exp,
                 post=post_exp,
                 body=body,
-                location=loc,
             ),
-            location=loc,
         ), rest
 
     @staticmethod
@@ -614,6 +618,8 @@ class Statement(HasLoc):
     def from_tokens(tokens: lexer.Lexed) -> tuple[Statement, lexer.Lexed]:
         (next_token, _, loc), *rest = tokens
 
+        _ = lexer.CURRENT_LOCATION.set(loc)
+
         def get_back_expression():
             # Well then it must be an expression followed by a semicolon
             exp, rest = Expression.from_tokens(tokens)
@@ -627,25 +633,23 @@ class Statement(HasLoc):
         match next_token:
             case "SEMICOLON":
                 return (
-                    Statement(root="nope", location=loc),
+                    Statement(root="nope"),
                     rest,
                 )
             case "BREAK_KEYWORD":
                 return (
-                    Statement(root=Break(location=loc), location=loc),
+                    Statement(root=Break()),
                     _next_is_semicolon(rest),
                 )
             case "CONTINUE_KEYWORD":
                 return (
-                    Statement(root=Continue(location=loc), location=loc),
+                    Statement(root=Continue()),
                     _next_is_semicolon(rest),
                 )
             case "RETURN_KEYWORD":
                 exp, rest = Expression.from_tokens(rest)
                 return (
-                    Statement(
-                        root=ReturnStatement(exp=exp, location=loc), location=loc
-                    ),
+                    Statement(root=ReturnStatement(exp=exp)),
                     _next_is_semicolon(rest),
                 )
             case "WHILE_KEYWORD":
@@ -661,8 +665,7 @@ class Statement(HasLoc):
                 body, rest = Statement.from_tokens(after)
                 return (
                     Statement(
-                        root=While(condition=condition, body=body, location=loc),
-                        location=loc,
+                        root=While(condition=condition, body=body),
                     ),
                     rest,
                 )
@@ -705,9 +708,7 @@ class Statement(HasLoc):
                             condition=expression,
                             then=then_stmt,
                             else_s=else_stmt,
-                            location=loc,
                         ),
-                        location=loc,
                     ),
                     rest,
                 )
@@ -721,7 +722,6 @@ class Statement(HasLoc):
 
                 stmt = Statement(
                     root=Goto(label=Identifier.from_tokens(identifier), location=loc),
-                    location=loc,
                 )
                 return stmt, _next_is_semicolon(rest)
             case "IDENTIFIER":
@@ -734,9 +734,7 @@ class Statement(HasLoc):
                         root=Label(
                             label=Identifier.from_tokens(tokens[0]),
                             statement=child_stmt,
-                            location=loc,
                         ),
-                        location=loc,
                     ), rest
                 # probably an expression
                 return get_back_expression()
@@ -747,15 +745,14 @@ class Statement(HasLoc):
                     root=Block.from_tokens(
                         rest[0:closing_bracket_index],
                     ),
-                    location=loc,
                 ), rest[closing_bracket_index + 1 :]
 
             case "SWITCH_KEYWORD":
                 switch, rest = Switch.from_tokens(rest)
-                return Statement(root=switch, location=loc), rest
+                return Statement(root=switch), rest
             case "CASE_KEYWORD" | "DEFAULT_KEYWORD":
                 case, rest = SwitchCase.from_tokens(tokens)
-                return Statement(root=case, location=loc), rest
+                return Statement(root=case), rest
             case _:
                 # probably an expression
                 return get_back_expression()
@@ -807,14 +804,15 @@ class Block(HasLoc):
         ```
         """
         parsed_body: list[Block_Item] = []
-        loc = tokens[0][2] if tokens else lexer.Location(0, 0)
+        if tokens:
+            _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
 
         while tokens:
             item, tokens = Block.block_item_from_tokens(tokens)
 
             parsed_body.append(item)
 
-        return Block(body=parsed_body, location=loc)
+        return Block(body=parsed_body)
 
     @staticmethod
     def block_item_from_tokens(tokens: lexer.Lexed) -> tuple[Block_Item, lexer.Lexed]:
@@ -959,7 +957,7 @@ class Expression(Typed, HasLoc):
             tokens: lexer.Lexed, min_prec: int = 0
         ) -> tuple[Expression, lexer.Lexed]:
             left, right = Factor.parse(tokens)
-            loc = tokens[0][2]
+            _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
             while right:
                 (operator, _identifier, _), *rest = right
 
@@ -974,13 +972,11 @@ class Expression(Typed, HasLoc):
                     # shit, I hate these nerds
                     other_rest = rest
                     left = Factor(
-                        location=loc,
                         type=None,
                         root=Unary(
                             op=operator,
                             exp=left,  # pyright: ignore[reportArgumentType]
                             pre=False,
-                            location=loc,
                         ),
                     )
 
@@ -990,13 +986,11 @@ class Expression(Typed, HasLoc):
                     # special case!
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator])
 
-                    identifier = Expression(root=left, type=None, location=loc)
+                    identifier = Expression(root=left, type=None)
                     left = (
-                        Fancy_Assignment(
-                            lhs=identifier, rhs=rhs, type=operator, location=loc
-                        )
+                        Fancy_Assignment(lhs=identifier, rhs=rhs, type=operator)
                         if operator != "="
-                        else Normal_Assignment(lhs=identifier, rhs=rhs, location=loc)
+                        else Normal_Assignment(lhs=identifier, rhs=rhs)
                     )
                 elif operator == "?":
                     middle, rhs = inner(rest, 0)
@@ -1005,10 +999,9 @@ class Expression(Typed, HasLoc):
                         raise ParseError(loc, "BAD IF EXPRESSION")
                     right, other_rest = inner(rhs, BINARY_OP_PRECEDENCE[operator])
                     left = Conditional(
-                        left=Expression(root=left, type=None, location=loc),
+                        left=Expression(root=left, type=None),
                         middle=middle,
                         right=right,
-                        location=loc,
                     )
 
                 else:
@@ -1016,13 +1009,12 @@ class Expression(Typed, HasLoc):
                     rhs, other_rest = inner(rest, BINARY_OP_PRECEDENCE[operator] + 1)
                     left = BinaryOp(
                         op=operator,  # pyright: ignore[reportArgumentType]
-                        lhs=Expression(root=left, type=None, location=loc),
+                        lhs=Expression(root=left, type=None),
                         rhs=rhs,
-                        location=loc,
                     )
                 right = other_rest
 
-            return Expression(root=left, type=None, location=loc), right
+            return Expression(root=left, type=None), right
 
         exp, rest = inner(tokens, min_prec)
         if assert_no_food_left:
@@ -1111,13 +1103,14 @@ class Factor(Typed, HasLoc):
     @staticmethod
     def parse(tokens: lexer.Lexed) -> tuple[Factor, lexer.Lexed]:
         (token, identifier, charno), *rest = tokens
+        _ = lexer.CURRENT_LOCATION.set(charno)
         match token:
             case "IDENTIFIER":
                 ident = Identifier.from_tokens((token, identifier, charno))
                 if not rest or rest[0][0] != "OPEN_PARENS":
                     # It's just an identifier
                     return (
-                        Factor(root=ident, type=None, location=charno),
+                        Factor(root=ident, type=None),
                         rest,
                     )
 
@@ -1127,9 +1120,8 @@ class Factor(Typed, HasLoc):
 
                 return (
                     Factor(
-                        root=Func_Call(name=ident, args=arg_list, location=charno),
+                        root=Func_Call(name=ident, args=arg_list),
                         type=None,
-                        location=charno,
                     ),
                     rest[corresponding_closed + 1 :],
                 )
@@ -1139,7 +1131,6 @@ class Factor(Typed, HasLoc):
                         root=Constant.from_token(
                             (token, identifier, charno),  # pyright: ignore[reportArgumentType]
                         ),
-                        location=charno,
                         type=None,
                     ),
                     rest,
@@ -1148,14 +1139,13 @@ class Factor(Typed, HasLoc):
                 if rest[0][0] in ("INT_KEYWORD", "LONG_KEYWORD"):
                     # shoot, it's a cast!
                     cast, rest = Cast.from_tokens(rest)
-                    return Factor(root=cast, type=None, location=charno), rest
+                    return Factor(root=cast, type=None), rest
                 corresponding_closed = get_closing(rest, ")")
                 return (
                     Factor(
                         root=Expression.from_tokens(
                             rest[:corresponding_closed], assert_no_food_left=True
                         ),
-                        location=charno,
                         type=None,
                     ),
                     rest[corresponding_closed + 1 :],
@@ -1166,8 +1156,7 @@ class Factor(Typed, HasLoc):
                 return (
                     Factor(
                         type=None,
-                        location=charno,
-                        root=Unary(op=token, exp=exp, location=charno),
+                        root=Unary(op=token, exp=exp),
                     ),
                     rest,
                 )
@@ -1215,7 +1204,7 @@ class Cast(HasLoc):
             tokens[corresponding_closed + 1 :], min_prec=operator_precedence("CAST")
         )
 
-        return Cast(target_type=ctype, exp=exp, location=tokens[0][2]), rest
+        return Cast(target_type=ctype, exp=exp), rest
 
     @t.override
     def __str__(self):
@@ -1407,20 +1396,18 @@ class Fancy_Assignment(HasLoc):
         rhs: Expression = self.rhs
         lhs = self.lhs
         type = self.type
+        _ = lexer.CURRENT_LOCATION.set(self.location)
 
         def get_bin_op(op: Binary_Op_Without_Assignment):
             return Expression(
                 type=None,
-                location=self.location,
                 root=BinaryOp(
                     op=op,
                     lhs=Expression(
-                        root=Factor(root=lhs, type=None, location=self.location),
+                        root=Factor(root=lhs, type=None),
                         type=None,
-                        location=self.location,
                     ),
                     rhs=rhs,
-                    location=self.location,
                 ),
             )
 
@@ -1449,7 +1436,6 @@ class Fancy_Assignment(HasLoc):
         return Normal_Assignment(
             lhs=lhs,
             rhs=rhs,
-            location=self.location,
         )
 
 
@@ -1510,11 +1496,12 @@ class Switch(Labelled_Construct):
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[Switch, lexer.Lexed]:
         tokens = _next_is(tokens, "OPEN_PARENS")
+        _ = lexer.CURRENT_LOCATION.set(tokens[0][2])
         closing_parens = get_closing(tokens, ")")
         exp_tokens, rest = tokens[:closing_parens], tokens[closing_parens + 1 :]
         checker = Expression.from_tokens(exp_tokens, assert_no_food_left=True)
         body, rest = Statement.from_tokens(rest)
-        return Switch(checker=checker, body=body, location=tokens[0][2]), rest
+        return Switch(checker=checker, body=body), rest
 
     @t.override
     def __str__(self):
@@ -1567,6 +1554,7 @@ class SwitchCase(Labelled_Construct):
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[SwitchCase, lexer.Lexed]:
         (keyword, _, loc), *rest = tokens
+        _ = lexer.CURRENT_LOCATION.set(loc)
         assert keyword in ("DEFAULT_KEYWORD", "CASE_KEYWORD"), (
             "This should have been caught earlier brother!"
         )
@@ -1581,7 +1569,7 @@ class SwitchCase(Labelled_Construct):
 
         body, rest = Statement.from_tokens(rest)
 
-        return SwitchCase(type=type, body=body, location=loc), rest
+        return SwitchCase(type=type, body=body), rest
 
 
 def _next_is(tokens: lexer.Lexed, which: lexer.Token):
@@ -1638,15 +1626,34 @@ def get_closing(
 
 
 class ParseError(ValueError):
-    def __init__(self, location: lexer.Location, msg: str, context: int = 2):
+    def __init__(self, location: lexer.Location | None, msg: str, context: int = 2):
+        if location is None:
+            location = lexer.CURRENT_LOCATION.get()
+        start = max(location.lineno - context, 0)
+        end = location.lineno + context + 1
+        errors = lexer.PRE_PROCESSED.get()[start:end]
         txt = [
-            msg,
-            f"{lexer.FILENAME.get()}:{location.lineno}",
-            "```c",
-            *lexer.POST_PRE_COMPILED.get()[
-                max(location.lineno - context, 0) : location.lineno + context + 1
-            ],
+            f"\n{lexer.FILENAME.get()}:{location.lineno}",
             "```",
         ]
+
+        for index, context_lines in enumerate(errors, start=start):
+            txt.append(context_lines)
+            if index == location.lineno:
+                m = re.search(r"^\s*", context_lines)
+                if m:
+                    neat_thing = f"┗{('┅' * (len(context_lines) - max(m.end(), 1)))}┛"
+                    whitespace = context_lines[: max(m.end() - 1, 0)]
+                    middle = len(neat_thing) // 2
+                    neat_thing = neat_thing[:middle] + "┳" + neat_thing[middle + 1 :]
+                    txt.append(f"{whitespace}{neat_thing}")
+                    txt.append(f"{whitespace}{' ' * middle}┇")
+                    txt.append(f"{whitespace}{' ' * middle}{msg}")
+                else:
+                    # SHOULD be unreachable...
+                    # Suspicious...but whatever!
+                    txt.append("┗" + "┅" * max(len(context_lines) - 2, 0) + "┛")
+
+        txt.append("```")
 
         super().__init__("\n".join(txt))

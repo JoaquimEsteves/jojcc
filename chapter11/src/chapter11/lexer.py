@@ -6,7 +6,7 @@ import typing as t
 from shared import data_types as dt
 from shared.pure_functions import get_literal_vals
 
-POST_PRE_COMPILED: ContextVar[list[str]] = ContextVar("POST_PRE_COMPILED", default=None)  # pyright: ignore[reportAssignmentType]
+PRE_PROCESSED: ContextVar[list[str]] = ContextVar("POST_PRE_COMPILED", default=None)  # pyright: ignore[reportAssignmentType]
 """
 We need to store this nerd in some sort of global so that other sections of the
 code can point to it whenever there's a mistake
@@ -19,13 +19,21 @@ class Location(t.NamedTuple):
     lineno: dt.uInt
 
 
-def lex(input: str, filename: Path | None = None):
-    _ = POST_PRE_COMPILED.set(input.split("\n"))
+CURRENT_LOCATION: ContextVar[Location] = ContextVar(
+    "CURRENT_LOCATION",
+    default=None,  # pyright: ignore[reportAssignmentType]
+)
+
+
+def lex(pre_processed: str, filename: Path | None = None):
+    _ = PRE_PROCESSED.set(pre_processed.split("\n"))
     if filename:
         _ = FILENAME.set(str(filename))
     lexed: Lexed = []
     charno = 0
-    lines = {i: m.start() for i, m in enumerate(i for i in re.finditer(r"\n", input))}
+    lines = {
+        i: m.start() for i, m in enumerate(i for i in re.finditer(r"\n", pre_processed))
+    }
 
     def inner(current: str, charno: dt.CharNo):
         for token, regex in TOKEN_REGEX.items():
@@ -41,16 +49,18 @@ def lex(input: str, filename: Path | None = None):
                 tweaked_charno = charno
             line: int | None = None
             for lineno in lines:
-                if charno <= lines[lineno]:
+                if tweaked_charno <= lines[lineno]:
                     line = lineno
                     break
             assert line is not None
             lexed.append((token, found, Location(tweaked_charno, line)))
+            # We have to pass the original charno
             return current[match.end() :], charno + match.end()
         raise ValueError("Syntax Error")
 
-    while not WHITESPACE.fullmatch(input):
-        input, charno = inner(input, charno)
+    current = pre_processed
+    while not WHITESPACE.fullmatch(current):
+        current, charno = inner(current, charno)
 
     return lexed
 

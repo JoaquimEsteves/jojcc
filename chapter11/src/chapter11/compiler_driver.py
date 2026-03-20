@@ -261,12 +261,12 @@ def main():
 
         if c_flag:
             object_file = compile_but_no_link(filename, assembly_str, output_file)
-            print(f"compiled to {object_file.absolute()}")
+            print(f"🦀 Compiled to {object_file.absolute()} 🦀")
             continue
 
     if also_link:
         elf = link(filenames, full_assembly, output_file)
-        print(f"compiled to {elf.absolute()}")
+        print(f"🦀 Compiled to {elf.absolute()} 🦀")
 
 
 if __name__ == "__main__":

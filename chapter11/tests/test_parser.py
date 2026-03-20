@@ -29,7 +29,7 @@ def test_functions():
     """)
     )
 
-    with pytest.raises(AssertionError):
+    with pytest.raises(parser.ParseError):
         _ = parser.Program.from_tokens(
             lexer.lex("""
         static static foo(int hello, int there);

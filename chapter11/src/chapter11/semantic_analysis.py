@@ -11,6 +11,7 @@ from contextvars import ContextVar
 from pydantic import BaseModel, Field
 
 import chapter11.parser as parser
+import chapter11.lexer as lexer
 from shared import pure_functions as pf
 
 Global_Counter: int = 0
@@ -61,17 +62,26 @@ class Identifier_Table(BaseModel):
         if not prev.from_current_scope():
             return
 
+        err_name = _og(name)
         match prev.has_linkage, decl.storage:
             case False, None:
-                err = f"Redefinition of '{name}'"
+                err = f"Redefinition of '{err_name}'"
             case False, "static":
-                err = f"Redefinition of '{name}'. Old one is still in scope brother!"
+                err = (
+                    f"Redefinition of '{err_name}'. Old one is still in scope brother!"
+                )
             case False, "extern":
-                err = f"Extern declaration of '{name}' follows non-extern declaration"
+                err = (
+                    f"Extern declaration of '{err_name}' follows non-extern declaration"
+                )
             case True, None:
-                err = f"Non-extern declaration of '{name}' follows extern declaration"
+                err = (
+                    f"Non-extern declaration of '{err_name}' follows extern declaration"
+                )
             case True, "static":
-                err = f"Static declaration of '{name}' follows non-static declaration"
+                err = (
+                    f"Static declaration of '{err_name}' follows non-static declaration"
+                )
             case True, "extern":
                 # They refer to the same object
                 err = None
@@ -250,6 +260,11 @@ class Label_Map(BaseModel):
 
     data: dict[str, str] = {}
 
+    OG_NAMES: t.ClassVar[dict[str, str]] = {}
+    """
+    Only used to print better error messages
+    """
+
     def valid_declaration(self, name: str):
         return name not in self.data
 
@@ -391,6 +406,7 @@ def resolve_program(prog: parser.Program):
     """
 
     def fix_functions(original: parser.Function_Declaration):
+        _ = lexer.CURRENT_LOCATION.set(original.location)
         # Important that the `LABEL_MAP` gets redefined _before_ `resolve_function_declaration`
         # As it's _that_ function that changes the names of all of the labels
         with pf.set_context(LABEL_MAP, Label_Map()):
@@ -455,6 +471,8 @@ def resolve_function_declaration(func: parser.Function_Declaration):
     assert id_table.valid_function_declaration(func)
     id_table.add_external(func)
 
+    _ = lexer.CURRENT_LOCATION.set(func.location)
+
     # We denote a new scope, because `int a(int a);` is valid
     with Identifier_Table.new_scope():
         param_list = [
@@ -493,7 +511,9 @@ def resolve_block(body: parser.Block) -> parser.Block:
     Note: A new block does not necessarily mean a new scope.
     Example-Error: `int _(int foo) { int foo; }` is an error!
     """
-    return parser.Block(body=[resolve_block_item(block) for block in body.body])
+    return parser.Block(
+        body=[resolve_block_item(block) for block in body.body], location=body.location
+    )
 
 
 def resolve_block_item(block: parser.Block_Item):
@@ -527,6 +547,7 @@ def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
 
 def resolve_declaration(decl: parser.Variable_Declaration):
     variable_map = IDENTIFIER_TABLE.get()
+    _ = lexer.CURRENT_LOCATION.set(decl.location)
     if variable_map.scope == 0:
         # SPECIAL RULES!
         # We don't validate at all (yet), we treat them as external and move on.
@@ -565,6 +586,8 @@ def resolve_declaration(decl: parser.Variable_Declaration):
 
 
 def resolve_statement(stmt: parser.Statement) -> parser.Statement:
+    loc = stmt.location
+    _ = lexer.CURRENT_LOCATION.set(stmt.location)
     match stmt.root:
         case "nope":
             return stmt
@@ -572,7 +595,10 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
         case parser.Break():
             if not (control_label := _get_control_label()):
                 raise SemanticError(stmt.location, "No control label found!")
-            return parser.Statement(root=parser.Break(control_label=control_label))
+            return parser.Statement(
+                root=parser.Break(control_label=control_label, location=loc),
+                location=loc,
+            )
         case parser.Continue():
             if not (control_label := _get_control_label("loop")):
                 raise SemanticError(stmt.location, "No control label found!")
@@ -690,6 +716,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
 
 
 def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
+    _ = lexer.CURRENT_LOCATION.set(lvalue.location)
     match lvalue:
         case parser.Identifier():
             return resolve_identifier(lvalue, IDENTIFIER_TABLE.get())
@@ -792,12 +819,15 @@ def resolve_identifier(
         if isinstance(where_to_check, Label_Map):
             resolved_name = where_to_check.get_new_name(name)
         else:
-            raise SemanticError(identifier.location, f"Identifier {name} not found!")
+            raise SemanticError(
+                identifier.location, f"Identifier {_og(name)} not found!"
+            )
 
     return parser.Identifier(root=resolved_name)
 
 
 def resolve_factor(factor: parser.Factor) -> parser.Factor:
+    _ = lexer.CURRENT_LOCATION.set(factor.location)
     match factor.root:
         case parser.Cast(target_type=target_type, exp=exp):
             # It feels really weird that we're checking here
@@ -848,6 +878,7 @@ def resolve_factor(factor: parser.Factor) -> parser.Factor:
 
 
 def resolve_expression(exp: parser.Expression) -> parser.Expression:
+    _ = lexer.CURRENT_LOCATION.set(exp.location)
     match exp.root:
         case parser.Conditional(left=left, middle=middle, right=right):
             return parser.Expression(
@@ -1110,7 +1141,7 @@ def type_check_expression(exp: parser.Expression | parser.Factor):
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             old = symbol_table.data[name]
             if not isinstance(old.type, parser.CType.FuncType):
-                raise nope(f"{name} is not a function!")
+                raise nope(f"{_og(name)} is not a function!")
             new_args: list[parser.Expression] = []
             assert len(old.type.params) == len(args), "Wrong number of arguments bro!"
             for param, current_arg in zip(old.type.params, args, strict=True):
@@ -1329,7 +1360,12 @@ def _get_new_name(original: str):
     # `a12`
     new_name = f"{original}`{Global_Counter}"
     Global_Counter += 1
+    Label_Map.OG_NAMES[new_name] = original
     return new_name
+
+
+def _og(new_name: str):
+    return Label_Map.OG_NAMES.get(new_name, new_name)
 
 
 def _get_control_label(type: t.Literal["all", "loop", "switch"] = "all"):
