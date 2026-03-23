@@ -549,6 +549,10 @@ class CType(BaseModel):
     def is_trivial(self: CType):
         return self.root in TRIVIAL_TYPES
 
+    def is_signed(self: CType):
+        assert self.is_trivial()
+        return self.root in ("int", "long")
+
     def get_trivial(self) -> Trivial_SubType:
         _ = self.assert_is_trivial(self)
         return self.root  # pyright: ignore[reportReturnType]
@@ -1126,7 +1130,7 @@ class Constant(HasLoc):
     @t.override
     def __str__(self):
         val = self.root
-        if self.ctype.root in ("int", "long"):
+        if self.ctype.is_signed():
             # shit...make sure we print them as negatives!
             size = self.ctype.get_size()
             while val > dt.x64.max[size]:

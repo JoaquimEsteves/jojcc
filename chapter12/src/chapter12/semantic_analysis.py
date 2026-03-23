@@ -1311,9 +1311,7 @@ def _get_common_type(left: parser.CType | None, right: parser.CType | None):
     l_size, r_size = left.get_size(), right.get_size()
 
     if l_size == r_size:
-        if left.root in ("int", "long"):
-            return right
-        return left
+        return right if left.is_signed() else left
 
     if l_size > r_size:
         return left

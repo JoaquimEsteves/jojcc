@@ -2,23 +2,24 @@
 underscore denotes new shit
 
 ```
-program = Program(top_level*)
-top_level = Function(identifier, bool global, identifier* params, instruction* body)
-          | StaticVariable(identifier, bool global, _type t, static_init init_)
+program = Program(toplevel*)
+toplevel = Function(identifier, bool global, identifier* params, instruction* body)
+          | StaticVariable(identifier, bool global, type t, staticinit init)
 instruction = Return(val)
-            | _SignExtend(val src, val dst)_
-            | _Truncate(val src, val dst)_
-            | Unary(unary_operator, val src, val dst)
-            | Binary(binary_operator, val src1, val src2, val dst)
+            | SignExtend(val src, val dst)
+            | Truncate(val src, val dst)
+            | ZeroExtend(val src, val dst)
+            | Unary(unaryoperator, val src, val dst)
+            | Binary(binaryoperator, val src1, val src2, val dst)
             | Copy(val src, val dst)
             | Jump(identifier target)
             | JumpIfZero(val condition, identifier target)
             | JumpIfNotZero(val condition, identifier target)
             | Label(identifier)
-            | FunCall(identifier fun_name, val* args, val dst)
+            | FunCall(identifier funname, val* args, val dst)
 val = Constant(const) | Var(identifier)
-unary_operator = Complement | Negate | Not
-binary_operator = Add | Subtract | Multiply | Divide | Remainder | Equal | NotEqual
+unaryoperator = Complement | Negate | Not
+binaryoperator = Add | Subtract | Multiply | Divide | Remainder | Equal | NotEqual
                 | LessThan | LessOrEqual | GreaterThan | GreaterOrEqual
 ```
 """
@@ -230,14 +231,34 @@ def emit_exp(
             return emit_func_call(exp.root, instructions)
         case parser.Cast(target_type=target_type, exp=inner):
             res = emit_exp(inner, instructions)
+            assert inner.type
             if target_type == inner.type:
                 return res
             destination = Var.new(type=target_type)
             inst: Instruction
-            if target_type.root == "long":
+            target_size, original_size = target_type.get_size(), inner.type.get_size()
+
+            if target_size == original_size:
+                # So copying from uint to int
+                # We might emit an unecessary instruction
+                # But who cares - we'll clean that up on the optimizations
+                # It's overall necessary because codegen requires different
+                # instructions for signed vs unsigned types
+                inst = Copy(src=res, dest=destination)
+            elif target_size < original_size:
+                # Truncate from long->int
+                inst = Truncate(src=res, dest=destination)
+            elif inner.type.is_signed():
+                # Target is a bigger size than the original!
+                # So we have to sign-extend it
+                # example: int a = -1 -> unsigned long a
                 inst = SignExtend(src=res, dest=destination)
             else:
-                inst = Truncate(src=res, dest=destination)
+                # Target is bigger but we were dealing with an unsigned type!
+                # We have to ensure we're not adding a bunch of 1s
+                # So uint a = 10123123123123 -> long
+                inst = ZeroExtend(src=res, dest=destination)
+
             instructions.append(inst)
             return destination
         case parser.Identifier(root=name):
@@ -666,6 +687,7 @@ type Instruction = (
     | Func_Call
     | SignExtend
     | Truncate
+    | ZeroExtend
 )
 type Value = parser.Constant | Var
 
@@ -810,6 +832,12 @@ class Truncate(SrcDest):
     @t.override
     def __str__(self):
         return f"(truncate {self.src!s} {self.dest!s})"
+
+
+class ZeroExtend(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(ZeroExtend {self.src!s} {self.dest!s})"
 
 
 class Copy(SrcDest):
