@@ -34,8 +34,10 @@ def preprocess(input_file: Path) -> PreProcessed:
     return PreProcessed(output_file)
 
 
-def compile_but_no_link(filename: Path, ass: codegen.Ass, output_file: Path | None):
-    assembly_path = _file_extensions(filename, ".c$", "s", override=False)
+def compile_but_no_link(
+    filename: Path, ass: codegen.Ass, output_file: Path | None, *, keep_assembly: bool
+):
+    assembly_path = _file_extensions(filename, ".c$", "s")
     output_file = output_file or _file_extensions(filename, ".c$", "o")
 
     with open(assembly_path, "w") as f:
@@ -45,18 +47,27 @@ def compile_but_no_link(filename: Path, ass: codegen.Ass, output_file: Path | No
         [dt.COMPILER.get(), "-c", str(assembly_path), "-o", str(output_file)],
         check=True,
     )
-    assembly_path.unlink()
+    if keep_assembly:
+        print(f"Keeping {assembly_path} for you!")
+    else:
+        assembly_path.unlink()
 
     assert output_file.exists(), "What happened yo?"
     return output_file
 
 
-def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | None):
+def link(
+    filenames: list[Path],
+    asses: list[codegen.Ass],
+    output_file: Path | None,
+    *,
+    keep_assembly: bool,
+):
     # Traditionally PREPROCESSED_FILES have the `.i` extension
 
     assembly_paths: list[Path] = []
     for filename, ass in zip(filenames, asses, strict=True):
-        assembly_path = _file_extensions(filename, ".c$", "s", override=False)
+        assembly_path = _file_extensions(filename, ".c$", "s")
         if output_file is None:
             # just grab the first one lol
             output_file = _file_extensions(filename, ".c$", "")
@@ -70,28 +81,24 @@ def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | No
         [dt.COMPILER.get(), *map(str, assembly_paths), "-o", str(output_file)],
         check=True,
     )
-    for p in assembly_paths:
-        p.unlink()
+
+    if keep_assembly or dt.DEBUG.get():
+        print(f"🐛 Keeping {', '.join(map(str, assembly_paths))} for you! 🐛")
+    else:
+        for p in assembly_paths:
+            p.unlink()
 
     assert output_file.exists(), "What happened yo?"
     return output_file
 
 
-def _file_extensions(input_file: Path, remove: str, new: str, *, override: bool = True):
+def _file_extensions(input_file: Path, remove: str, new: str):
     assert input_file.exists(), "Dude - where is the file?"
     tweaked_name = re.sub(remove, "", input_file.name)
     if new:
         tweaked_name = f"{tweaked_name}.{new}"
 
-    res = input_file.parent / f"{tweaked_name}"
-    if override:
-        return res
-    # We want to keep the existing file
-    i = -1
-    while res.exists():
-        i += 1
-        res = input_file.parent / f"{i}_{tweaked_name}"
-    return res
+    return input_file.parent / f"{tweaked_name}"
 
 
 class Args(t.NamedTuple):
@@ -103,6 +110,7 @@ class Args(t.NamedTuple):
     tacky: bool
     S: bool
     c: bool
+    keep_assembly: bool
     o: Path | None
 
 
@@ -120,6 +128,15 @@ def _arg_parse():
         """),
     )
     _ = parser.add_argument(
+        "-k",
+        "--keep-assembly",
+        action="store_true",
+        help=dedent("""\
+            Normally we'd delete assembly files; but we can keep them around just for you!
+        """),
+    )
+    _ = parser.add_argument(
+        "-p",
         "--parse",
         action="store_true",
         help=dedent("""\
@@ -203,6 +220,7 @@ def main():
         tacky_f,
         S_flag,
         c_flag,
+        keep_assembly,
         output_file,
     ) = _arg_parse()
 
@@ -260,12 +278,14 @@ def main():
             continue
 
         if c_flag:
-            object_file = compile_but_no_link(filename, assembly_str, output_file)
+            object_file = compile_but_no_link(
+                filename, assembly_str, output_file, keep_assembly=keep_assembly
+            )
             print(f"🦀 Compiled to {object_file.absolute()} 🦀")
             continue
 
     if also_link:
-        elf = link(filenames, full_assembly, output_file)
+        elf = link(filenames, full_assembly, output_file, keep_assembly=keep_assembly)
         print(f"🦀 Compiled to {elf.absolute()} 🦀")
 
 

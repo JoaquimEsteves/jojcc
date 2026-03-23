@@ -6,7 +6,7 @@ from pydantic import BaseModel, Field
 
 import chapter12.parser as parser
 import chapter12.lexer as lexer
-from shared import pure_functions as pf
+from shared import pure_functions as pf, data_types as dt
 
 Global_Counter: int = 0
 """
@@ -866,6 +866,10 @@ def resolve_expression(exp: parser.Expression) -> parser.Expression:
                 ),
             )
         case parser.Fancy_Assignment():
+            # TODO(Joaquim): This is wrong!!!
+            # The lval must be evaluated only ONCE
+            # Otherwise we'll get problems with
+            # something like arr[f()] += 1
             return resolve_expression(
                 parser.Expression(root=exp.root.to_normal_assignment(), type=None)
             )
@@ -1018,9 +1022,17 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
             if decl.name.root in symbol_table:
                 raise nope("Compiler bug! The identifier map messed up brother")
             symbol_table.data[decl.name.root] = Symbol_Table.Local(type=decl.type)
-
-            if decl.init:
-                type_check_expression(decl.init)
+            if not decl.init:
+                return
+            type_check_expression(decl.init)
+            if decl.init.type != decl.type:
+                new_init = _convert_to(decl.init, decl.type)
+                # shit! Can happen
+                # Trivial example
+                # `long i = -1`
+                # We have to sign-extend the little guy
+                type_check_expression(new_init)
+                decl.init = new_init
 
 
 def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration):
@@ -1178,8 +1190,31 @@ def type_check_expression(exp: parser.Expression):
                 type_check_expression(new_rhs)
             exp.root.rhs = new_rhs
             exp.type = typed_left
-        case parser.Constant(ctype=trivial_type):
+
+        case parser.Constant(root=root, ctype=trivial_type):
+            # we have to handle promotion
+            if t.TYPE_CHECKING:
+                assert isinstance(trivial_type.root, str)
+            match trivial_type.root:
+                case "uint":
+                    if root > dt.x64.umax[32]:
+                        trivial_type.root = "ulong"
+                case _:
+                    # It's weird, but there's a test for integer promotion
+                    # but that stuff only appears in chapter 16???
+                    # There's a tiiiiiny little paragraph I jumped over.
+                    #
+                    # > We also need to deal with constant tokens. In the
+                    # > previous chapter, Listing 11-6 demonstrated how to parse
+                    # > signed constant tokens. I won't include the corresponding
+                    # > pseudocode for unsigned constant tokens here, but the
+                    # > logic is the same. We parse an unsigned integer constant
+                    # > token as ConstUInt if it's within the range of values an
+                    # > unsigned int can hold; that is, between 0 and 232 - 1,
+                    # > inclusive. Otherwise, we parse it as a ConstULong.
+                    pass
             exp.type = trivial_type
+
         case parser.Cast(target_type=target_type, exp=inner):
             type_check_expression(inner)
             exp.type = target_type

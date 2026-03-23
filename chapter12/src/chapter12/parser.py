@@ -1146,10 +1146,16 @@ class Constant(HasLoc):
             case "LONG_CONSTANT":
                 # Removes the little `[lL]|[uL]` from the string
                 v = int(token[1][:-1])
-                ctype = CType(root="long")
+                if v > dt.x64.max[64]:
+                    ctype = CType(root="ulong")
+                else:
+                    ctype = CType(root="long")
             case "UNSIGNED_CONSTANT":
                 v = int(token[1][:-1])
-                ctype = CType(root="uint")
+                if v > dt.x64.max[32]:
+                    ctype = CType(root="ulong")
+                if v > dt.x64.max[64]:
+                    ctype = CType(root="uint")
             case "UNSIGNED_LONG_CONSTANT":
                 # Remove ul
                 v = int(token[1][:-2])

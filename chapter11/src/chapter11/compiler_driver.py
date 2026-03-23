@@ -27,7 +27,7 @@ def preprocess(input_file: Path) -> PreProcessed:
     output_file = _file_extensions(input_file, ".c$", "i")
 
     _ = subprocess.run(
-        [dt.COMPILER.get(), "-E", "-P", str(input_file), "-o", str(output_file)],
+        [dt.COMPILER.get(), "-g", "-E", "-P", str(input_file), "-o", str(output_file)],
         check=True,
     )
 
@@ -42,7 +42,7 @@ def compile_but_no_link(filename: Path, ass: codegen.Ass, output_file: Path | No
         _ = f.write(ass.root)
 
     _ = subprocess.run(
-        [dt.COMPILER.get(), "-c", str(assembly_path), "-o", str(output_file)],
+        [dt.COMPILER.get(), "-g", "-c", str(assembly_path), "-o", str(output_file)],
         check=True,
     )
     assembly_path.unlink()
@@ -67,7 +67,7 @@ def link(filenames: list[Path], asses: list[codegen.Ass], output_file: Path | No
 
     assert output_file, "What happened yo?"
     _ = subprocess.run(
-        [dt.COMPILER.get(), *map(str, assembly_paths), "-o", str(output_file)],
+        [dt.COMPILER.get(), "-g", *map(str, assembly_paths), "-o", str(output_file)],
         check=True,
     )
     for p in assembly_paths:

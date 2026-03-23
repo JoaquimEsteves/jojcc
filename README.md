@@ -23,6 +23,7 @@ See the makefile
 
 ## Neat documents
 
+- [From the author herself](https://norasandler.com/book/)
 - [Draft of the C23 standard](https://www.open-std.org/JTC1/SC22/WG14/www/docs/n2310.pdf)
   It's the draft since (as the book points out) the real deal costs 200$ (lol)
 - [System V ABI](https://gitlab.com/x86-psABIs/x86-64-ABI)
