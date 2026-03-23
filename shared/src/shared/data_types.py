@@ -140,4 +140,4 @@ class x64:
     max: t.Final[dict[Bit_Size, int]] = {
         size: 2 ** (size - 1) - 1 for size in from_bit_size
     }
-    umax: t.Final[dict[Bit_Size, int]] = {size: 2**size for size in from_bit_size}
+    umax: t.Final[dict[Bit_Size, int]] = {size: 2**size - 1 for size in from_bit_size}

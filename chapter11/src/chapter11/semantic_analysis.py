@@ -1258,7 +1258,7 @@ def type_check_statement(stmt: parser.Statement):
                 type_check_statement(body)
             # Finally - we can now add the cases!
             stmt.root.associated_cases = list(found_cases.values())
-        case parser.SwitchCase(type=type, body=body):
+        case parser.SwitchCase(type=type, body=body, location=loc):
             cast_to = TYPE_OF_SWITCH.get()
             assert cast_to, "could not determine type of cast!"
             found_cases = FOUND_CASES.get()
@@ -1276,7 +1276,8 @@ def type_check_statement(stmt: parser.Statement):
                         )
                     )
 
-            assert as_str not in found_cases, "This case was already found!"
+            if as_str in found_cases:
+                raise SemanticError(loc, "This case was already found!")
             found_cases[as_str] = stmt.root
 
         case parser.Label(statement=statement):

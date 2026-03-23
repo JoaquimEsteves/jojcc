@@ -919,9 +919,11 @@ class Imm(BaseModel):
         return f"${self.root}"
 
     def truncate(self):
-        root = self.root - dt.x64.umax[32] * (self.root // dt.x64.umax[32])
+        mod_32 = dt.x64.umax[32] + 1
+
+        root = self.root - mod_32 * (self.root // mod_32)
         if root >= dt.x64.max[32]:
-            root -= dt.x64.umax[32]
+            root -= mod_32
 
         if root >= dt.x64.max[32]:
             raise ValueError("Programmer skill issue. Should be impossible")

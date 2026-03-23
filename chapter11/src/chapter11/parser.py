@@ -1135,7 +1135,7 @@ class Constant(HasLoc):
                 # This effectively `cuts` the first 4 bytes
                 # (This `while` thing looks jank i gotta say)
                 while val > max_int:
-                    val = val - max_uint
+                    val -= max_uint + 1
                 return val
             case "int":
                 return val
