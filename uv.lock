@@ -7,6 +7,7 @@ members = [
     "chapter1",
     "chapter10",
     "chapter11",
+    "chapter12",
     "chapter2",
     "chapter3",
     "chapter4",
@@ -63,6 +64,11 @@ source = { editable = "chapter10" }
 name = "chapter11"
 version = "0.1.0"
 source = { editable = "chapter11" }
+
+[[package]]
+name = "chapter12"
+version = "0.1.0"
+source = { editable = "chapter12" }
 
 [[package]]
 name = "chapter2"
@@ -193,6 +199,7 @@ dependencies = [
     { name = "chapter1" },
     { name = "chapter10" },
     { name = "chapter11" },
+    { name = "chapter12" },
     { name = "chapter2" },
     { name = "chapter3" },
     { name = "chapter4" },
@@ -219,6 +226,7 @@ requires-dist = [
     { name = "chapter1", editable = "chapter1" },
     { name = "chapter10", editable = "chapter10" },
     { name = "chapter11", editable = "chapter11" },
+    { name = "chapter12", editable = "chapter12" },
     { name = "chapter2", editable = "chapter2" },
     { name = "chapter3", editable = "chapter3" },
     { name = "chapter4", editable = "chapter4" },
