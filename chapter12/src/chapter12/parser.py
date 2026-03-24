@@ -1427,6 +1427,9 @@ class Fancy_Assignment(HasLoc):
         Note: `a %= 1` is the same as `a = a % 1`
 
         In ALMOST everyway. The only problem is that this nerd is not a valid lvalue
+
+        TODO(Joaquim): THIS IS WRONG! The left side _must_ only be evaluated _once_
+        Bug: `arr[f()] += 1` would evaluate f() twice
         """
         # pyright needed some help here
         rhs: Expression = self.rhs

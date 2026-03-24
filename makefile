@@ -72,7 +72,7 @@ type_check:
 
 # In `test` mode we always run the final and all previous
 test: TEST_PROG=writing-a-c-compiler-tests/test_compiler
-test: $(VENV) $(MAKE_CACHE)/chapter_12_parser type_check
+test: $(VENV) $(MAKE_CACHE)/chapter_12_final type_check
 	@:
 .PHONY: test
 

@@ -326,12 +326,11 @@ class Function(BaseModel):
             if isinstance(arg_source, Stack):
                 stack[param_name] = arg_source.root
             else:
-                instructions.extend(
-                    Mov.new(
+                instructions.append(
+                    Mov(
                         size=arg_size,
                         src=arg_source,
                         dest=get_val(Pseudo(root=func.params[index][0].name)),
-                        # dest=Pseudo(root=func.params[index][0].name, to_operand=pseudo_to_operand),  # noqa: ERA001
                     )
                 )
 
@@ -344,8 +343,8 @@ class Function(BaseModel):
                         Mov_Zero_Extend(src=get_val(src), dest=get_val(dest)),
                     )
                 case tacky.Truncate(src=src, dest=dest):
-                    instructions.extend(
-                        Mov.new(
+                    instructions.append(
+                        Mov(
                             size=32,
                             src=get_val(src),
                             dest=get_val(dest),
@@ -360,7 +359,7 @@ class Function(BaseModel):
                     size = BST.get_size(value) if value else 32
                     instructions.extend(
                         [
-                            *Mov.new(
+                            Mov(
                                 size=size,
                                 src=src,
                                 dest=Reg(root="A", size=size),
@@ -378,11 +377,9 @@ class Function(BaseModel):
                     )
 
                 case tacky.Copy(src=src, dest=dest):
-                    instructions.extend(
-                        Mov.new(
-                            BST.get_size(src),
-                            get_val(src),
-                            get_val(dest),
+                    instructions.append(
+                        Mov(
+                            size=BST.get_size(src), src=get_val(src), dest=get_val(dest)
                         )
                     )
 
@@ -463,56 +460,47 @@ class Mov(_Sized):
     src: Operand
     dest: Operand
 
-    @staticmethod
-    def new(
-        size: dt.x64.Bit_Size,
-        src: Operand,
-        dest: Operand,
-    ) -> list[Mov]:
-        """
-        TODO(Joaquim): Get rid of this and do it only at the `to_assembly` level
-        """
-        # if src == Imm(root=17179869189):
+    def to_assembly(self) -> str:
+        src, dest, size = self.src, self.dest, self.size
+
+        def default():
+            return (
+                f"mov{self.assembly_type()} {src.to_assembly()}, {dest.to_assembly()}"
+            )
+
+        def with_scratch():
+            scratch = Reg.get_scratch(size=self.size)
+            return "\n".join(
+                [
+                    Mov(size=size, src=src, dest=scratch).to_assembly(),
+                    Mov(size=size, src=scratch, dest=dest).to_assembly(),
+                ]
+            )
+
         match src, dest:
             case Stack() | Data(), Stack() | Data():
                 # It's illegal to mov from one mem-address into another
                 # So we need to move to a strach register
-                scratch = Reg.get_scratch(size=size)
-                return [
-                    Mov(size=size, src=src, dest=scratch),
-                    Mov(size=size, src=scratch, dest=dest),
-                ]
+                return with_scratch()
+
+            case Imm(), Reg():
+                return default()
+
+            case Imm(), Imm():
+                raise ValueError("Compiler error")
 
             case Imm(), _:
-                src = src.truncate(size)
-
-                if abs(src.root) < dt.x64.max[32]:
-                    return [Mov(size=size, src=src, dest=dest)]
+                src = src.truncate(self.size)
+                if abs(src.root) < dt.x64.max[32] or isinstance(dest, Reg):
+                    return default()
 
                 # Large boys must go into a register first _before_ they go into whatever
                 # destination they were meant
-                scratch = Reg.get_scratch(size=size)
-                return [
-                    Mov(size=size, src=src, dest=scratch),
-                    Mov(size=size, src=scratch, dest=dest),
-                ]
+                return with_scratch()
 
             case _:
                 # just one mov is fine
-                return [Mov(size=size, src=src, dest=dest)]
-
-    @model_validator(mode="after")
-    def assert_no_illegal(self):
-        match (self.src, self.dest):
-            case (Stack() | Data(), Stack() | Data()):
-                raise ValueError("You can't move from one memory address to another!")
-            case (Imm(), Imm()):
-                raise ValueError("You can't move one constant on top of another!")
-            case _:
-                return self
-
-    def to_assembly(self) -> str:
-        return f"mov{self.assembly_type()} {self.src.to_assembly()}, {self.dest.to_assembly()}"
+                return default()
 
 
 class Mov_Zero_Extend(_SrcDest):
@@ -526,10 +514,11 @@ class Mov_Zero_Extend(_SrcDest):
 
         scratch = Reg(root="R11", size=32)
         return "\n".join(
-            i.to_assembly()
-            for i in (
-                Mov(src=self.src, dest=scratch, size=32),
-                *Mov.new(src=Reg(root="R11", size=64), dest=self.dest, size=64),
+            (
+                Mov(src=self.src, dest=scratch, size=32).to_assembly(),
+                Mov(
+                    src=Reg(root="R11", size=64), dest=self.dest, size=64
+                ).to_assembly(),
             )
         )
 
@@ -601,7 +590,7 @@ class Unary(_Sized):
                 dest = get_val(destination)
                 size = BST.get_size(source)
                 return (
-                    *Mov.new(
+                    Mov(
                         size=size,
                         src=src,
                         dest=dest,
@@ -652,20 +641,20 @@ class Binary(_Sized):
 
             case "ASTERISK", _, Stack() | Data():
                 scratch = Reg.get_scratch("R11", size=self.size)
-                pre = Mov.new(
+                pre = Mov(
                     src=self.dest,
                     dest=scratch,
                     size=self.size,
                 )
-                after = Mov.new(
+                after = Mov(
                     src=scratch,
                     dest=self.dest,
                     size=self.size,
                 )
                 return (
-                    f"{'\n'.join(p.to_assembly() for p in pre)}\n"
+                    f"{pre.to_assembly()}\n"
                     f"{Binary(op=self.op, src=self.src, dest=scratch, size=self.size, is_signed=self.is_signed).to_assembly()}\n"
-                    f"{'\n'.join(a.to_assembly() for a in after)}"
+                    f"{after.to_assembly()}"
                 )
 
             case "LEFT_SHIFT" | "RIGHT_SHIFT", Reg() | Stack() | Data(), dest:
@@ -761,7 +750,7 @@ class Binary(_Sized):
 
             case _arrithmetic:
                 return (
-                    *Mov.new(size=size, src=src1, dest=dest),
+                    Mov(size=size, src=src1, dest=dest),
                     Binary(
                         size=size,
                         op=inst.operation,  # pyright: ignore[reportArgumentType]
@@ -793,7 +782,7 @@ class Cmp(_Sized):
             case _, Imm():
                 # The destination can never be an Immediate
                 # (This seems weird, shouldn't I just switch them?)
-                dest = Reg.get_scratch(size=self.size)
+                dest = Reg.get_scratch("R11", size=self.size)
                 intermediate = Mov(src=self.rhs, dest=dest, size=self.size)
                 return "\n".join(
                     (
@@ -813,7 +802,7 @@ class Cmp(_Sized):
                 return "\n".join(
                     p.to_assembly()
                     for p in (
-                        *Mov.new(size=self.size, src=src, dest=scratch),
+                        Mov(size=self.size, src=src, dest=scratch),
                         Cmp(size=self.size, lhs=scratch, rhs=self.rhs),
                     )
                 )
