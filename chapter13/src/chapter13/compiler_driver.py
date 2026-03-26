@@ -128,7 +128,7 @@ class Args(t.NamedTuple):
     S: bool
     c: bool
     keep_assembly: bool
-    lib_for_linker: list[str]
+    lib_for_linker: list[str] | None
     o: Path | None
 
 
@@ -310,7 +310,7 @@ def main():
                 filename,
                 assembly_str,
                 output_file,
-                lib_for_linker,
+                lib_for_linker or [],
                 keep_assembly=keep_assembly,
             )
             print(f"🦀 Compiled to {object_file.absolute()} 🦀")
@@ -321,7 +321,7 @@ def main():
             filenames,
             full_assembly,
             output_file,
-            lib_for_linker,
+            lib_for_linker or [],
             keep_assembly=keep_assembly,
         )
         print(f"🦀 Compiled to {elf.absolute()} 🦀")

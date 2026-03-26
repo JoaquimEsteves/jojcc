@@ -19,6 +19,17 @@ System V x64 ABI is very specific about float representation; so we'll just have
 
 ## IEEE 754 Double-Precision Float
 
+TLDR: Grab yourself a python terminal and type the following:
+
+```python
+>>> (2.5).hex()
+'0x1.4000000000000p+1'
+```
+
+ie: `-1**1 * (1 + 4 / 0x10 + 0 / 0x100 + 0 / 0x1000 ...) * 2**1`
+
+THEM'S THE RULES.
+
 The value of `(-1)^Sign × 1.F × 2ⁿ` is represented thusly in binary:
 
 ```

@@ -8,56 +8,40 @@ New shit in underscore
 <declaration> ::= <variable-declaration> | <function-declaration>
 <variable-declaration> ::= {<specifier>}+ <identifier> ["=" <exp>] ";"
 <function-declaration> ::= {<specifier>}+ <identifier> "(" <param-list> ")" (<block> | ";")
-<type-specifier> ::= 'int' | 'long' | _'unsigned'_ | _'signed'_
+<param-list> ::= "void"
+               | {<type-specifier>}+ <identifier> {"," {<type-specifier>}+ <identifier>}
+<type-specifier> ::= "int" | "long" | "unsigned" | "signed" | _"double"_
 <specifier> ::= <type-specifier> | "static" | "extern"
-<param-list> ::= "void" | <type-specifier>+ <identifier> {"," <type-specifier>+ <identifier>}
-<block> ::= "{" {<block-item} "}"
+<block> ::= "{" {<block-item>} "}"
 <block-item> ::= <statement> | <declaration>
-<declaration> ::= "int" <identifier> ["=" <exp>] ";"
 <for-init> ::= <variable-declaration> | [<exp>] ";"
 <statement> ::= "return" <exp> ";"
-    | <exp> ";"
-    | ";"
-    | "if" "(" <exp> ")" <statement> ["else" <statement>]
-    | goto <identifier>;
-    | <identifier>: <statement>
-    | <block>
-    | "break" ";"
-    | "continue" ";"
-    | "while" "(" <exp> ")" <statement>
-    | "do" <statement> "while" "(" <exp> ")" ";"
-    | "for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>
-    | switch(<expression>) <statement>
-    | <switchtype>
-<switchtype> ::= case <constantexpression>: {<statement>} | default: {<statement>}
-<constantexpression>  ::= <int>
+              | <exp> ";"
+              | "if" "(" <exp> ")" <statement> ["else" <statement>]
+              | <block>
+              | "break" ";"
+              | "continue" ";"
+              | "while" "(" <exp> ")" <statement>
+              | "do" <statement> "while" "(" <exp> ")" ";"
+              | "for" "(" <for-init> [<exp>] ";" [<exp>] ")" <statement>
+              | ";"
 <exp> ::= <factor> | <exp> <binop> <exp> | <exp> "?" <exp> ":" <exp>
-<factor> ::= <const>
-  | <identifier>
-  | "(" {<type-specifier>}+ ")" <factor>
-  | <unop> <factor>
-  | <factor> <postop>
-  | "(" <exp> ")"
-  | <identifier> '(' [<argument-list>] ')'
+<factor> ::= <const> | <identifier>
+           | "(" {<type-specifier>}+ ")" <factor>
+           | <unop> <factor> | "(" <exp> ")"
+           | <identifier> "(" [<argument-list>] ")"
 <argument-list> ::= <exp> {"," <exp>}
-<unop> ::= "-" | "~" | "!" | "++" | "--"
-<postop> ::= "++" | "--"
+<unop> ::= "-" | "~" | "!"
 <binop> ::= "-" | "+" | "*" | "/" | "%" | "&&" | "||"
           | "==" | "!=" | "<" | "<=" | ">" | ">=" | "="
-          | "+=" | "-=" | "*=" | "%=" | "&=" | "|=" | "^=" | "<<=" | ">>="
+<const> ::= <int> | <long> | <uint> | <ulong> | _<double>_
 <identifier> ::= ? An identifier token ?
-<const> ::= <int> | <long>
-<int> ::= ? A constant token ?
-<long> ::= ? A constant token ?
-<uint> ::= ? A constant token ?
-<ulong> ::= ? A constant token ?
+<int> ::= ? An int token ?
+<long> ::= ? An int or long token ?
+<uint> ::= ? An unsigned int token ?
+<ulong> ::= ? An unsigned int or unsigned long token ?
+_<double> ::= ? A floating-point constant token ?_
 ```
-
-Notes:
-
-> While parsing <block-item>, you need a way to tell whether the current block
-> item is a statement or a declaration. To do this, peek at the first token; if
-> it's the int keyword, it's a declaration, and otherwise it's a statement.
 
 """
 
@@ -93,6 +77,7 @@ class Program(BaseModel):
 
 def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lexed]:
     assert len(tokens) >= 3, "not enough tokens mannn!"
+    function_loc = tokens[0][2]
 
     (ctype, storage), rest = Specifiers.from_tokens(tokens)
     identifier, *rest = rest
@@ -140,6 +125,7 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
 
             return (
                 Function_Declaration(
+                    location=function_loc,
                     type=CType.FuncType(
                         return_type=ctype,
                         params=[p.type for p in param_list],
@@ -158,10 +144,6 @@ def declaration_from_tokens(tokens: lexer.Lexed) -> tuple[Declaration, lexer.Lex
 @t.final
 class Specifiers:
     """
-
-    <specifier> ::= <type-specifier> | "static" | "extern"
-    <type-specifier> ::= "int" | "long"
-
 
     Returns the ctype and storage-class given some tokens.
 
@@ -213,6 +195,9 @@ class Specifiers:
                 case "INT_KEYWORD" | "LONG_KEYWORD":
                     types.append(CType.from_token((next_token, token, loc)))
                     tokens = rest
+                case "DOUBLE_KEYWORD":
+                    types.append(CType(root="double"))
+                    tokens = rest
                 case "EXTERN_KEYWORD" | "STATIC_KEYWORD":
                     # pydantic will catch us if we goof here
                     storage_classes.append(token)  # pyright: ignore[reportArgumentType]
@@ -226,7 +211,7 @@ class Specifiers:
 
         if len(types) == 0:
             if signed_token is None:
-                raise ParseError(tokens[0][2], "Bro!")
+                raise ParseError(tokens[0][2], "Bro! There's no `auto` in my language")
             types = [CType(root="int")]
         # Technically - the types can be automatically inferred to be 'int'
         # But the book says to just enforce it
@@ -251,7 +236,9 @@ class Specifiers:
 
         final_type = types[0]
         if signed_token == "UNSIGNED_KEYWORD":
-            # Neat
+            # Neat! - note that this will throw an error if we do
+            # unsigned double
+            # pyright is the best
             final_type = CType(root=f"u{final_type.root}")  # pyright: ignore[reportArgumentType]
 
         return (final_type, storage_class), tokens
@@ -521,7 +508,7 @@ class For(Labelled_Construct):
         raise ExceptionGroup("Failed to parse for-init!", stfu.caught)
 
 
-type Trivial_SubType = t.Literal["int", "long", "uint", "ulong"]
+type Trivial_SubType = t.Literal["int", "long", "uint", "ulong", "double"]
 TRIVIAL_TYPES: frozenset[Trivial_SubType] = pf.get_literal_vals(Trivial_SubType)  # pyright: ignore[reportAssignmentType]
 
 
@@ -550,7 +537,7 @@ class CType(BaseModel):
 
     def is_signed(self: CType):
         assert self.is_trivial()
-        return self.root in ("int", "long")
+        return self.root in ("int", "long", "double")
 
     def get_trivial(self) -> Trivial_SubType:
         _ = self.assert_is_trivial(self)
@@ -560,7 +547,7 @@ class CType(BaseModel):
         match self.root:
             case "int" | "uint":
                 return 32
-            case "long" | "ulong":
+            case "long" | "ulong" | "double":
                 return 64
             case CType.FuncType():
                 raise ValueError("WE DON'T DO FUNCTION POINTERS YET")
@@ -1080,6 +1067,7 @@ class Expression(Typed, HasLoc):
                 | "LONG_CONSTANT"
                 | "UNSIGNED_CONSTANT"
                 | "UNSIGNED_LONG_CONSTANT"
+                | "FLOAT_CONSTANT"
             ):
                 return (
                     Expression(
@@ -1096,6 +1084,7 @@ class Expression(Typed, HasLoc):
                     "LONG_KEYWORD",
                     "SIGNED_KEYWORD",
                     "UNSIGNED_KEYWORD",
+                    "DOUBLE_KEYWORD",
                 ):
                     # shoot, it's a cast!
                     cast, rest = Cast.from_tokens(rest)
@@ -1123,18 +1112,32 @@ class Expression(Typed, HasLoc):
 
 
 class Constant(HasLoc):
-    root: int
+    root: int | float
     ctype: TrivialType
 
     @t.override
     def __str__(self):
         val = self.root
+
+        if self.ctype.root == "double":
+            if t.TYPE_CHECKING:
+                assert isinstance(val, float)
+            return f"{val} <{val.hex()}>"
+
+        recursion_limit = 0
         if self.ctype.is_signed():
             # shit...make sure we print them as negatives!
             size = self.ctype.get_size()
             while val > dt.x64.max[size]:
                 val -= dt.x64.umax[size] + 1
-        return f"{val} ({hex(self.root)})"
+                recursion_limit += 1
+                if recursion_limit > 100:
+                    raise ValueError("Compiler skill issue")
+
+        if t.TYPE_CHECKING:
+            assert isinstance(self.root, int)
+        # Print as hex, makes it easier to debug silly sign errors
+        return f"{val} <{hex(self.root)}>"
 
     @staticmethod
     def from_token(token: lexer.Token):
@@ -1142,6 +1145,11 @@ class Constant(HasLoc):
 
         ctype = CType(root="int")
         match which_token:
+            case "FLOAT_CONSTANT":
+                v = float(token[1])
+                # we return right away since we don't need to do any further checking
+                # We just hope that python is smart enough to `round-to-nearest`
+                return Constant(root=v, ctype=CType(root="double"))
             case "LONG_CONSTANT":
                 # Removes the little `[lL]|[uL]` from the string
                 v = int(token[1][:-1])
@@ -1178,26 +1186,35 @@ class Constant(HasLoc):
         return Constant(root=int(bool), ctype=CType(root="int"))
 
     @staticmethod
-    def fit(val: int, target: Trivial_SubType):
+    def fit(val: int | float, target: Trivial_SubType) -> int | float:
         """
         Given some infinite int - make it fit an int/long/etc
         """
-        if val > dt.x64.umax[64]:
+        if isinstance(val, int) and val > dt.x64.umax[64]:
             raise ParseError(msg=f"{val=} can not be represented as int or long!")
 
-        match target:
-            case "ulong":
+        match val, target:
+            case float(), "double":
                 return val
-            case "long" if val > dt.x64.max[64]:
+            case float(), _:
+                # Round it to an int and then move on!
+                # Interestingly - 2.8 is rounded to `2`
+                # That's just the way C does it, so neat!
+                return Constant.fit(int(val), target)
+            case int(), "ulong":
+                return val
+            case int(), "long" if val > dt.x64.max[64]:
                 return val & dt.x64.umax[64]
-            case "long":
+            case int(), "long":
                 return val
-            case "uint":
+            case int(), "uint":
                 return val & dt.x64.umax[32]
-            case "int" if val > dt.x64.max[32]:
+            case int(), "int" if val > dt.x64.max[32]:
                 return val & dt.x64.umax[32]
-            case "int":
+            case int(), "int":
                 return val
+            case int(), "double":
+                return float(val)
 
 
 class Func_Call(HasLoc):
@@ -1613,7 +1630,7 @@ def _next_is(tokens: lexer.Lexed, which: lexer.Token):
         assert next == which
     except Exception as e:
         if tokens:
-            raise ParseError(tokens[0][2], "Missing {which} bro!") from e
+            raise ParseError(tokens[0][2], f"Missing {which} bro!") from e
         raise AssertionError(f"Missing {which} bro!") from e
     return rest
 

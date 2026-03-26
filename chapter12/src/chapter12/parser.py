@@ -241,7 +241,11 @@ class Specifiers:
             as_set = {str(t.root) for t in types}
             if as_set != {"long", "int"}:
                 raise ParseError(
-                    tokens[0][2], "Bad types! We only accept int/long or long int"
+                    tokens[0][2],
+                    (
+                        "Bad multiple types! "
+                        "We only accept int/long or long int when dealing with multiple"
+                    ),
                 )
             types = [CType(root="long")]
 

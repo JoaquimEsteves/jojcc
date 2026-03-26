@@ -220,7 +220,7 @@ class Symbol_Table(BaseModel):
 
     class Static(BaseModel):
         class StaticInit(BaseModel):
-            val: int
+            val: int | float
 
             @staticmethod
             def from_declaration(decl: parser.Variable_Declaration, *, mutate: bool):
@@ -384,6 +384,20 @@ CURRENT_FUNCTION: ContextVar[parser.Function_Declaration | None] = ContextVar(
 )
 
 
+def set_new_loc[T: parser.HasLoc](function: t.Callable[[T], T]):
+    """
+    Wrapper to set the location for pretty-errors.
+    Otherwise we'd take to set_context and pop all the time
+    (Not in love with how "magical" this is, but it's fine)
+    """
+
+    def wrap(arg: T) -> T:
+        with pf.set_context(lexer.CURRENT_LOCATION, arg.location):
+            return function(arg)
+
+    return wrap
+
+
 ###############################################################################
 #                                                                             #
 #                                Resolve Funcs                                #
@@ -399,8 +413,8 @@ def resolve_program(prog: parser.Program):
     the state.
     """
 
+    @set_new_loc
     def fix_functions(original: parser.Function_Declaration):
-        _ = lexer.CURRENT_LOCATION.set(original.location)
         # Important that the `LABEL_MAP` gets redefined _before_ `resolve_function_declaration`
         # As it's _that_ function that changes the names of all of the labels
         with pf.set_context(LABEL_MAP, Label_Map()):
@@ -460,12 +474,12 @@ def resolve_program(prog: parser.Program):
     return parser.Program(declarations=fixed)
 
 
+@set_new_loc
 def resolve_function_declaration(func: parser.Function_Declaration):
     id_table = IDENTIFIER_TABLE.get()
     assert id_table.valid_function_declaration(func)
     id_table.add_external(func)
 
-    _ = lexer.CURRENT_LOCATION.set(func.location)
     is_top_level = id_table.scope == 0
 
     # We denote a new scope, because `int a(int a);` is valid
@@ -499,6 +513,7 @@ def resolve_function_declaration(func: parser.Function_Declaration):
         param_list=param_list,
         body=body,
         storage=func.storage,
+        location=func.location,
     )
 
 
@@ -541,9 +556,9 @@ def resolve_for_init(for_init: parser.For_Init) -> parser.For_Init:
             return resolve_expression(for_init)
 
 
+@set_new_loc
 def resolve_declaration(decl: parser.Variable_Declaration):
     variable_map = IDENTIFIER_TABLE.get()
-    _ = lexer.CURRENT_LOCATION.set(decl.location)
     if variable_map.scope == 0:
         # SPECIAL RULES!
         # We don't validate at all (yet), we treat them as external and move on.
@@ -581,9 +596,9 @@ def resolve_declaration(decl: parser.Variable_Declaration):
     )
 
 
+@set_new_loc
 def resolve_statement(stmt: parser.Statement) -> parser.Statement:
     loc = stmt.location
-    _ = lexer.CURRENT_LOCATION.set(stmt.location)
     match stmt.root:
         case "nope":
             return stmt
@@ -698,7 +713,10 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             body = resolve_statement(body)
             match type:
                 case parser.SwitchCase.Case(check=check):
-                    assert check.is_const_expression(), "Not a constant expression bro!"
+                    if not check.is_const_expression():
+                        raise SemanticError(
+                            check.location, "Not a constant expression bro!"
+                        )
                     type = parser.SwitchCase.Case(check=resolve_expression(check))
                 case parser.SwitchCase.Default():
                     pass
@@ -711,8 +729,8 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             return parser.Statement(root=resolved)
 
 
+@set_new_loc
 def resolve_valid_lvalue(lvalue: parser.LValue) -> parser.LValue:
-    _ = lexer.CURRENT_LOCATION.set(lvalue.location)
     match lvalue:
         case parser.Expression():
             # shit...
@@ -751,12 +769,14 @@ def resolve_post_and_prefix_assignable(
     I still DON'T know what is something that is not assignable
     I just know, that `++a++` is NOT assignable
     """
-    current = exp.root
-    match current:
+    match exp.root:
         case parser.Unary(op=op, exp=inner, pre=pre):
             # Postfix and pre-fix operators being a PITA as usual
             # This is a valid assignable value `~a++`
-            assert op not in ("++", "--")
+            if op in ("++", "--"):
+                raise SemanticError(
+                    exp.location, "We can't have a postfix AND a prefix"
+                )
 
             return parser.Expression(
                 type=None,
@@ -769,10 +789,10 @@ def resolve_post_and_prefix_assignable(
         case parser.Identifier():
             return parser.Expression(
                 type=None,
-                root=resolve_identifier(current, IDENTIFIER_TABLE.get()),
+                root=resolve_identifier(exp.root, IDENTIFIER_TABLE.get()),
             )
         case _:
-            raise SemanticError(exp.location, f"{current} is not assignable!")
+            raise SemanticError(exp.location, f"{exp.root} is not assignable!")
 
 
 def resolve_goto_label(label: parser.Identifier):
@@ -805,17 +825,19 @@ def resolve_identifier(
     return parser.Identifier(root=resolved_name)
 
 
+@set_new_loc
 def resolve_factor(
     factor: parser.Expression.FactorSubType,
 ) -> parser.Expression.FactorSubType:
-    _ = lexer.CURRENT_LOCATION.set(factor.location)
     match factor:
         case parser.Cast(target_type=target_type, exp=exp):
             # It feels really weird that we're checking here
             # I think I messed up my operator precedence somewhere
-            assert not isinstance(
+            if isinstance(
                 exp.root, (parser.Normal_Assignment, parser.Fancy_Assignment)
-            ), "LValue bullshit"
+            ):
+                raise SemanticError(exp.location, "LValue bullshit")
+
             return parser.Cast(target_type=target_type, exp=resolve_expression(exp))
 
         case parser.Constant():
@@ -837,7 +859,8 @@ def resolve_factor(
             )
         case parser.Func_Call(name=parser.Identifier(root=name), args=args):
             identifier_table = IDENTIFIER_TABLE.get()
-            assert identifier_table.valid_func_call(name), "Undeclared function!"
+            if not identifier_table.valid_func_call(name):
+                raise SemanticError(factor.location, "Undeclared function!")
             new_name: str = identifier_table[name]  # pyright: ignore[reportAssignmentType]
             return parser.Func_Call(
                 name=parser.Identifier(new_name),
@@ -845,8 +868,8 @@ def resolve_factor(
             )
 
 
+@set_new_loc
 def resolve_expression(exp: parser.Expression) -> parser.Expression:
-    _ = lexer.CURRENT_LOCATION.set(exp.location)
     match exp.root:
         case parser.Conditional(left=left, middle=middle, right=right):
             return parser.Expression(
@@ -942,7 +965,7 @@ def type_check_function(func: parser.Function_Declaration):
         already_defined = old.defined
 
         if already_defined and has_body:
-            raise nope("function twice!")
+            raise nope("function already defined!")
 
         if old.type.return_type != func.type.return_type:
             raise nope("Conflicting types bro!")
@@ -1059,14 +1082,20 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
     if decl.name in symbol_table:
         # Run through the checklist
         old = symbol_table.data[decl.name.root]
-        assert not isinstance(old, Symbol_Table.Func), (
-            f"Redefinition of '{decl.name.root}' as different kind of symbol. "
-            "Old one was a function, new one is a variable!"
-        )
+        if isinstance(old, Symbol_Table.Func):
+            raise SemanticError(
+                decl.location,
+                (
+                    f"Redefinition of '{decl.name.root}' as different kind of symbol. "
+                    "Old one was a function, new one is a variable!"
+                ),
+            )
 
-        assert not isinstance(old, Symbol_Table.Local), (
-            f"Wait - how is '{decl.name.root}' already declared as a local???."
-        )
+        if isinstance(old, Symbol_Table.Local):
+            raise SemanticError(
+                decl.location,
+                (f"Wait - how is '{decl.name.root}' already declared as a local???."),
+            )
 
         symbol_table.assert_declaration_has_type_match(decl)
 
@@ -1077,9 +1106,14 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
             is_global = old.is_global
             # in both cases, `a` won't be a global symbol
         else:
-            assert old.is_global == is_global, (
-                f"Conflicting variable linkage! '{decl.name.root}' {is_global=} and yet {old.is_global=}."
-            )
+            if old.is_global != is_global:
+                raise SemanticError(
+                    decl.location,
+                    (
+                        f"Conflicting variable linkage! '{decl.name.root}' "
+                        f"{is_global=} and yet {old.is_global=}."
+                    ),
+                )
 
         # JANK ALERT
         match old.initial_value, initial_value:
@@ -1122,7 +1156,8 @@ def type_check_expression(exp: parser.Expression):
             if not isinstance(old.type, parser.CType.FuncType):
                 raise nope(f"{_og(name)} is not a function!")
             new_args: list[parser.Expression] = []
-            assert len(old.type.params) == len(args), "Wrong number of arguments bro!"
+            if len(old.type.params) != len(args):
+                raise SemanticError(exp.location, "Wrong number of arguments bro!")
             for param, current_arg in zip(old.type.params, args, strict=True):
                 type_check_expression(current_arg)
                 if param != current_arg.type:
@@ -1138,6 +1173,18 @@ def type_check_expression(exp: parser.Expression):
                 # 1 and 0 are always ints in C
                 exp.type = parser.CType.from_trivial("int")
                 return
+            for double_check in (rhs, lhs):
+                if double_check.type == parser.CType(root="double") and op in (
+                    "LEFT_SHIFT",
+                    "RIGHT_SHIFT",
+                    "PERCENT",
+                    "AMPERSAND",
+                    "PIPE",
+                    "CARRET",
+                ):
+                    raise SemanticError(
+                        double_check.location, f"{double_check} is a double dude!"
+                    )
             if op in ("LEFT_SHIFT", "RIGHT_SHIFT"):
                 new_rhs = _convert_to(rhs, parser.CType.from_trivial("int"))
                 type_check_expression(new_rhs)
@@ -1169,13 +1216,21 @@ def type_check_expression(exp: parser.Expression):
 
         case parser.Unary(op=op, exp=inner):
             type_check_expression(inner)
+            if inner.type == parser.CType(root="double") and op in (
+                "PERCENT",
+                "COMPLEMENT",
+            ):
+                raise SemanticError(
+                    inner.location, "Can't do this operation on a double!"
+                )
+            exp.type = inner.type
             if op == "NOT":
                 exp.type = parser.CType(root="int")
-            exp.type = inner.type
         case parser.Conditional(left=left, middle=middle, right=right):
             for sub in (left, middle, right):
                 type_check_expression(sub)
-            assert middle.type and right.type, "Dude - where my types at?"
+            if t.TYPE_CHECKING:
+                assert middle.type and right.type, "Dude - where my types at?"
             exp.type = _get_common_type(middle.type, right.type)
 
         case (
@@ -1239,7 +1294,10 @@ def type_check_statement(stmt: parser.Statement):
     match stmt.root:
         case parser.ReturnStatement(exp=exp):
             current_func = CURRENT_FUNCTION.get()
-            assert current_func, "Return called outside function nerd!"
+            if not current_func:
+                raise SemanticError(
+                    stmt.location, "Return called outside function nerd!"
+                )
             type_check_expression(exp)
             stmt.root.exp = _convert_to(exp, current_func.type.return_type)
         case parser.Expression():
@@ -1279,6 +1337,11 @@ def type_check_statement(stmt: parser.Statement):
         case parser.Switch(checker=checker, body=body):
             type_check_expression(checker)
             trivial_type = parser.CType.assert_is_trivial(checker.type)
+            if trivial_type == parser.CType(root="double"):
+                raise SemanticError(
+                    checker.location,
+                    "NOPE! The controlling expression's got to be an integer",
+                )
 
             found_cases: dict[str, parser.SwitchCase] = {}
             with (
@@ -1290,7 +1353,8 @@ def type_check_statement(stmt: parser.Statement):
             stmt.root.associated_cases = list(found_cases.values())
         case parser.SwitchCase(type=type, body=body, location=loc):
             cast_to = TYPE_OF_SWITCH.get()
-            assert cast_to, "could not determine type of cast!"
+            if not cast_to:
+                raise SemanticError(loc, "could not determine type of cast!")
             found_cases = FOUND_CASES.get()
 
             type_check_statement(body)
@@ -1299,6 +1363,10 @@ def type_check_statement(stmt: parser.Statement):
                 case parser.SwitchCase.Default():
                     as_str = "default"
                 case parser.SwitchCase.Case():
+                    if type.check.root.ctype == parser.CType(root="double"):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+                        raise SemanticError(
+                            type.check.location, "Nope! It's got to be an integer"
+                        )
                     as_str = str(
                         type.check.get_const_expression(
                             cast_to=cast_to.root,  # pyright: ignore[reportArgumentType]
@@ -1337,11 +1405,17 @@ def _get_common_type(left: parser.CType | None, right: parser.CType | None):
 
     Unsigned numbers have a higher rank than signed ones.
     Then we go by size, bigger size means bigger rank.
+
+
     """
     assert left and right and isinstance(left.root, str) and isinstance(right.root, str)
 
     if left == right:
         return left
+
+    if "double" in (left.root, right.root):
+        # doubles beat everything, we don't bother with 32-bit floats so who cares
+        return parser.CType(root="double")
 
     l_size, r_size = left.get_size(), right.get_size()
 
