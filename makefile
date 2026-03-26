@@ -184,3 +184,4 @@ include chapter9/makefile
 include chapter10/makefile
 include chapter11/makefile
 include chapter12/makefile
+include chapter13/makefile
