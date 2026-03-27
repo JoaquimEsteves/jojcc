@@ -65,8 +65,9 @@ This means that `subl a, b` computes `b - a` as opposed to the expected `a - b.`
 **DIVISION IS GOD-AWFUL**
 
 `add`, `subl`, `imull`, these all look clear and easy (except that ampersand on
-the $2, the fuck is up with that?). But now comes the final boss - division!
-For division apparently we're stuck with this jank `idiv` thing.
+the $2, the fuck is up with that? EDIT: It was a bug on my version of the book!
+There is an errata online). But now comes the final boss - division! For
+division apparently we're stuck with this jank `idiv` thing.
 
 From the book: (With some notes in `{}` from _je_)
 

@@ -73,13 +73,17 @@ main:
 
 **Register-Stack-Pointer (RSP)** -> Always holds the address at the top of the (current) stack.
 **Register-Base-Pointer (RBP)** -> Points to the base of the current stack frame (by convention)
-Most production compilers optimize the RBP away, using only the `RSP`, but for a n00b like me RBP is pretty cool.
+Most production compilers optimize the RBP away, using only the `RSP`, but for
+a n00b like me RBP is pretty cool.
 
 `push X` does two things.
 
 - Writes the value being pushed (X) to the next empty spot on the stack.
-  - The push/pop adjust the stack pointer in 8-byte increments. So the next empty spot after a `PUSH` is `RSP-8` (this book uses negative offset, to me it makes more sense that we increment it, but what can ya ya do lol)
-- Decrements the RSP by 8. The address in RSP is now the top of the stack, and the value is X
+  - The push/pop adjust the stack pointer in 8-byte increments. So the next
+    empty spot after a `PUSH` is `RSP-8` (this book uses negative offset, to me
+    it makes more sense that we increment it, but what can ya ya do lol)
+- Decrements the RSP by 8. The address in RSP is now the top of the stack, and
+  the value is X
 
 Example
 
@@ -107,7 +111,8 @@ Note this -4 business. push/pop are always 8-bytes, but ints are 4 bytes!
 But that's OK 'cos we can just `movl` to copy some 4-byte value (like an int)
 into stack space we've already allocated.
 
-So all functions begin by first invoking `push` N times, and then moving the values over to their spots on the stack.
+So all functions begin by first invoking `push` N times, and then moving the
+values over to their spots on the stack.
 
 | Fake-C         | Fake Assembly                                   |
 | -------------- | ----------------------------------------------- |

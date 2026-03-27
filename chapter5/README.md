@@ -70,18 +70,13 @@ compiler that some identifier exists and can be used later.
 Practically this means that this is invalid:
 
 ```c
-if (a == 2) {
-  int x = 0;
-}
+if (a == 2) int x = 0;
 ```
-
-`gcc` will complain, but `clang` doesn't give a shit.
 
 ### This is legal (but undefined behaviour)
 
 ```c
 int foo = foo + 1;
-
 ```
 
 From the book:

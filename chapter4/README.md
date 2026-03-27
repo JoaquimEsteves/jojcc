@@ -63,7 +63,8 @@ Here's when Overflow _CAN_ happen
 
 > OK, but like. Who cares?
 
-The problem is that the `cmp` instruction executes EXACTLY like the `sub`! So has the same impact on the RFLAGS
+The problem is that the `cmp` instruction executes EXACTLY like the `sub`! So
+has the same impact on the RFLAGS
 
 So we need to check these silly flags to ensure that our `cmp` didn't crap the bed due to some overflow.
 
@@ -93,7 +94,8 @@ Conditional Seet and flags
 | setle       | Set if less or equal (a <= b)    | 0       | 1   | 0   |
 
 Note: These `set` flags MUST operate at a byte level.
-So we want to set `%eax` we'll instead need to target `%al`, which is the last byte of the `%eax` register (HOW DOES ANYONE REMEMBER THIS SHIT??)
+So we want to set `%eax` we'll instead need to target `%al`, which is the last
+byte of the `%eax` register (HOW DOES ANYONE REMEMBER THIS SHIT??)
 
 Example:
 
@@ -108,7 +110,8 @@ setl %al  ; p/t %eax will print 11111111111111111111111100000001
 
 ## Jumps Baby
 
-Jumps operate in much the same way as the `set` boys, except that they jump to some label if the condition is true.
+Jumps operate in much the same way as the `set` boys, except that they jump to
+some label if the condition is true.
 
 ### Inspecting this stuff with good ol' GDB
 

@@ -258,6 +258,8 @@ So `caller/callee` tells us which can mutate the value.
 `caller-saved` -> `mut`
 `callee-saved` -> `const`
 
+EDIT: This previous paragraph feels wrong, I think I misread it.
+
 ### Stack Alignment
 
 System V ABI requires the stack to be 16-byte aligned (ie: the address RSP must be divisible by 128 BITS)
@@ -267,18 +269,11 @@ Simplest way to do so is to just always align the stack to 16.
 
 So - if for example we push some 32 int over to the stack we'd need to then push a bunch of extra stuff!
 
-```
-Stack = 0
-push 32_bit_int(12)
-assert stack % 128 # ERROR! Not 16-byte aligned
-# Instead we'd do:
-pushq 64_bit_register(12)
-subq 128 - 64
-# Hurray!
-```
+The solution is quite trivial - just ensure that the number of times we push is even.
+If it's not - then just subtract some extra padding from the stack.
 
-If, on the other hand we'd want to store 3 32 bit ints on the stack...well I
-have no idea I'll figure it out later.
+(Optimizations in the future: Naturally we can just spot that if we want 2 32 bit ints on the stack then
+we only need to push it once, but I suppose that is for the future)
 
 ### Example
 
@@ -325,7 +320,7 @@ caller:
     # transfer control to fun
     call    fun
     # restore the stack and RDI
-    addq    $24, %rsp    # why 24?
+    addq    $24, %rsp    # why 24? See below
     popq    %rdi
 
     .globl fun
@@ -350,13 +345,12 @@ So we have: `8 + 8 + 8 == 24`
 
 To align we merely push 8 bytes `24 % 16 = 8`
 
-| Stack Address | Content   | Instruction               |
-| ------------- | --------- | ------------------------- |
-| 0             | `RBP`     | (presumably) `pushq %rbp` |
-| 8             | `arg`     | `pushq %rdi`              |
-| 16            | `padding` | `subq $8, %rsp`           |
-| 24            | `g => 8`  | `pushq $8`                |
-| 32            | `h => 7`  | `pushq $7`                |
+| Stack Address | Content   | Instruction     |
+| ------------- | --------- | --------------- |
+| 0             | `arg`     | `pushq %rdi`    |
+| 8             | `padding` | `subq $8, %rsp` |
+| 16            | `g => 8`  | `pushq $8`      |
+| 24            | `h => 7`  | `pushq $7`      |
 
 ### The `call` instruction
 
