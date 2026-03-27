@@ -47,12 +47,15 @@ _<double> ::= ? A floating-point constant token ?_
 
 import typing as t
 from contextlib import suppress
+from logging import getLogger
 
 import shared.data_types as dt
 import shared.pure_functions as pf
-from pydantic import AfterValidator, BaseModel, Field, RootModel
+from pydantic import AfterValidator, BaseModel, Field, RootModel, model_validator
 
 from chapter13 import lexer
+
+logger = getLogger(__name__)
 
 
 class Program(BaseModel):
@@ -1114,6 +1117,20 @@ class Expression(Typed, HasLoc):
 class Constant(HasLoc):
     root: int | float
     ctype: TrivialType
+
+    @model_validator(mode="after")
+    def tweak_root_type(self):
+        match self.ctype.root, self.root:
+            case "double", float():
+                return self
+            case "double", int():
+                # Can happen when we're lazy and create our own expression
+                self.root = float(self.root)
+                return self
+            case _, float():
+                raise ParseError(self.location, "Compiler skill issue")
+            case _:
+                return self
 
     @t.override
     def __str__(self):

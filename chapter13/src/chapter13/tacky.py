@@ -2,24 +2,28 @@
 underscore denotes new shit
 
 ```
-program = Program(toplevel*)
-toplevel = Function(identifier, bool global, identifier* params, instruction* body)
-          | StaticVariable(identifier, bool global, type t, staticinit init)
+program = Program(top_level*)
+top_level = Function(identifier, bool global, identifier* params, instruction* body)
+          | StaticVariable(identifier, bool global, type t, static_init init)
 instruction = Return(val)
             | SignExtend(val src, val dst)
             | Truncate(val src, val dst)
             | ZeroExtend(val src, val dst)
-            | Unary(unaryoperator, val src, val dst)
-            | Binary(binaryoperator, val src1, val src2, val dst)
+            | _DoubleToInt(val src, val dst)_
+            | _DoubleToUInt(val src, val dst)_
+            | _IntToDouble(val src, val dst)_
+            | _UIntToDouble(val src, val dst)_
+            | Unary(unary_operator, val src, val dst)
+            | Binary(binary_operator, val src1, val src2, val dst)
             | Copy(val src, val dst)
             | Jump(identifier target)
             | JumpIfZero(val condition, identifier target)
             | JumpIfNotZero(val condition, identifier target)
             | Label(identifier)
-            | FunCall(identifier funname, val* args, val dst)
+            | FunCall(identifier fun_name, val* args, val dst)
 val = Constant(const) | Var(identifier)
-unaryoperator = Complement | Negate | Not
-binaryoperator = Add | Subtract | Multiply | Divide | Remainder | Equal | NotEqual
+unary_operator = Complement | Negate | Not
+binary_operator = Add | Subtract | Multiply | Divide | Remainder | Equal | NotEqual
                 | LessThan | LessOrEqual | GreaterThan | GreaterOrEqual
 ```
 """
@@ -32,6 +36,26 @@ from pydantic import BaseModel, BeforeValidator
 from chapter13 import parser, semantic_analysis
 from shared import data_types as dt
 from shared import pure_functions as pf
+
+
+type Instruction = (
+    Return
+    | Unary
+    | BinaryOp
+    | Copy
+    | Jump
+    | JumpIfZero
+    | JumpIfNotZero
+    | Label
+    | Func_Call
+    | SignExtend
+    | Truncate
+    | ZeroExtend
+    | DoubleToInt
+    | DoubleToUInt
+    | IntToDouble
+    | UIntToDouble
+)
 
 
 def emit_tacky(
@@ -235,6 +259,12 @@ def emit_exp(
             if target_type == inner.type:
                 return res
             destination = Var.new(type=target_type)
+
+            # Casting doubles is a little bit annoying
+            if cls := get_double_cast(inner.type, target_type):
+                instructions.append(cls(src=res, dest=destination))
+                return destination
+
             inst: Instruction
             target_size, original_size = target_type.get_size(), inner.type.get_size()
 
@@ -675,20 +705,6 @@ class Func_Call(BaseModel):
         return f"(= {self.dest} ({self.name} {' '.join(map(str, self.args) if self.args else '()')})"  # )
 
 
-type Instruction = (
-    Return
-    | Unary
-    | BinaryOp
-    | Copy
-    | Jump
-    | JumpIfZero
-    | JumpIfNotZero
-    | Label
-    | Func_Call
-    | SignExtend
-    | Truncate
-    | ZeroExtend
-)
 type Value = parser.Constant | Var
 
 
@@ -838,6 +854,48 @@ class ZeroExtend(SrcDest):
     @t.override
     def __str__(self):
         return f"(ZeroExtend {self.src!s} {self.dest!s})"
+
+
+class DoubleToInt(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(double-to-int {self.src!s} {self.dest!s})"
+
+
+class DoubleToUInt(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(double-to-uint {self.src!s} {self.dest!s})"
+
+
+class IntToDouble(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(int-to-double {self.src!s} {self.dest!s})"
+
+
+class UIntToDouble(SrcDest):
+    @t.override
+    def __str__(self):
+        return f"(uint-to-double {self.src!s} {self.dest!s})"
+
+
+def get_double_cast(original: parser.CType, target: parser.CType):
+    if "double" not in (original.root, target.root):
+        return None
+
+    match original.root, target.root:
+        case "int" | "long", "double":
+            return IntToDouble
+        case "uint" | "ulong", "double":
+            return UIntToDouble
+        case "double", "uint" | "ulong":
+            return DoubleToUInt
+        case "double", "int" | "long":
+            return DoubleToInt
+        case _:
+            # Handles function-types, and double-to-double
+            raise ValueError("Compiler skill issue")
 
 
 class Copy(SrcDest):
