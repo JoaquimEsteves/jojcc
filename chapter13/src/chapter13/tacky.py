@@ -375,7 +375,7 @@ def _emit_unary(unary_op: parser.Unary, instructions: list[Instruction]) -> Valu
     # Note - at this stage this factor _MUST_ be an lvalue
     # Semantic analysis handles that for us
     lhs = factor
-    rhs = parser.Expression(root=parser.Constant(root=1, ctype=type), type=type)
+    rhs = parser.Expression.from_constant(1, type)
     intermediate_exp = parser.Expression(
         type=type,
         root=parser.BinaryOp(
@@ -615,7 +615,7 @@ class Program(BaseModel):
 class Static_Variable(BaseModel):
     name: Valid_Identifier
     is_global: bool
-    init: semantic_analysis.Symbol_Table.Static.StaticInit
+    init: semantic_analysis.StaticInit
     type: parser.TrivialType
 
     @staticmethod
@@ -628,14 +628,14 @@ class Static_Variable(BaseModel):
             name=name,
             is_global=symbol.is_global,
             type=symbol.type,
-            init=semantic_analysis.Symbol_Table.Static.StaticInit(val=0),
+            init=semantic_analysis.StaticInit(val=0),
         )
 
         match symbol.initial_value:
             case "tentative":
                 # Initialized to zero
                 return res
-            case semantic_analysis.Symbol_Table.Static.StaticInit(val=val):
+            case semantic_analysis.StaticInit(val=val):
                 res.init.val = val
                 return res
             case "Nope!":

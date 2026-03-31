@@ -1,4 +1,4 @@
-from collections.abc import Sequence, Iterator
+from collections.abc import Sequence, Iterator, Iterable
 from contextvars import ContextVar
 from inspect import Traceback
 import re
@@ -141,3 +141,12 @@ def to_valid_c_name(text: str) -> dt.Identifier:
         quickly = quickly[1:]
     assert quickly, "Was your string just numbers???"
     return quickly
+
+
+def flatten[T](*items: T | Iterable[T]) -> Iterable[T]:
+    """Yield items from any nested iterable; see Reference."""
+    for x in items:
+        if isinstance(x, Iterable) and not isinstance(x, (str, bytes)):
+            yield from flatten(*x)  # pyright: ignore[reportUnknownArgumentType]
+        else:
+            yield x  # pyright: ignore[reportReturnType]

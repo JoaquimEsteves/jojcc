@@ -4,11 +4,14 @@
 
 Effectively I'm going through the book [Writing a C Compiler](https://nostarch.com/writing-c-compiler).
 
-I strongly recommend the book. It's a _workbook_, the lady will just tell you
-"Alright, you're on your own now buddy". Extra-Credit sections are the most fun, since there's no hand-holding whatsover.
-(Pre & Postfix operators were invented by the devil)
+I strongly recommend the book. It's a _workbook_, the author-lady will just
+tell you "Alright, you're on your own now buddy". Extra-Credit sections are the
+most fun, since there's no hand-holding whatsover. (Pre & Postfix operators
+were invented by the devil, Nora Sandler was sadistic to leave those as
+homework)
 
-I got it from a Humble-Bundle deal, 'cos otherwise the fekin' thing costs 69.99$ at the time of writing (Jesus!).
+At the time of writing the book costs 69.99$, but I got it from a Humble-Bundle
+deal for considerably less money.
 
 ## Get the submodules
 
@@ -129,3 +132,42 @@ because people liked the mnemonics and decided to invent new (shittier) mnenomic
 
 Cool thing they did was they now allow us to reference the low-high parts that
 32 bits didn't allow.
+
+## XMM REGISTERS BABY
+
+XMM Registers are the ones used for SSE (Signed SIMD (Single Instruction,
+Multiple Data) Extension) instructions. They are a whopping 128 bit wide!
+This is what the folks in the know call `non-general-purpose registers`.
+
+They are simply XMM0, XMM1, ..., XMM15.
+
+Invented circa 1999 by the Intel nerds, there were supposed to replace some
+other MMX registers.
+
+(Note: Recently there's even the YMM and ZMM registers!
+[Stack overflow has a good post about it](https://stackoverflow.com/a/44299695/6595024))
+
+As the name indicates they were an _extension_, they only became part of the
+core x64 instruction set after a while.
+
+They are also used in a variety of operations, not just floating-point stuff.
+When we ask GCC what's in some XMM register it'll reply _"Oh boy - there's
+options!"_
+
+```
+(gdb) // annotated and tweaked formatting
+(gdb) print $xmm0
+$4 = {
+  // 4 32 bit floats packed into a single register.
+  v4_float = {0, 2.1875, 0, 0},
+  // 2 doubles
+  v2_double = {3.5, 0},
+  // 16 int8s
+  v16_int8 = {0, 0, 0, 0, 0, 0, 12, 64, 0, 0, 0, 0, 0, 0, 0, 0},
+  // ...etc
+  v8_int16 = {0, 0, 0, 16396, 0, 0, 0, 0},
+  v4_int32 = {0, 1074528256, 0, 0},
+  v2_int64 = {4615063718147915776, 0},
+  uint128 = 4615063718147915776
+}
+```

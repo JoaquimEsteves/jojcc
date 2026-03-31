@@ -120,7 +120,7 @@ class Identifier_Table(BaseModel):
                 return name in self.data
 
     def get_new_name(self, original: str):
-        new_name = _get_new_name(original)
+        new_name = get_new_name(original)
         self.data[original] = Identifier_Table.Identifier(
             name=new_name,
             has_linkage=False,
@@ -219,29 +219,28 @@ class Symbol_Table(BaseModel):
         type: parser.CType.FuncType
 
     class Static(BaseModel):
-        class StaticInit(BaseModel):
-            val: int | float
-
-            @staticmethod
-            def from_declaration(decl: parser.Variable_Declaration, *, mutate: bool):
-                with pf.set_context(lexer.CURRENT_LOCATION, decl.location):
-                    val = (
-                        decl.init.get_const_expression(
-                            cast_to=decl.type.get_trivial(), mutate=mutate
-                        )
-                        if decl.init
-                        else 0
-                    )
-                    return Symbol_Table.Static.StaticInit(
-                        val=val,
-                    )
-
         initial_value: t.Literal["tentative", "Nope!"] | StaticInit
         type: parser.TrivialType
         is_global: bool
 
     class Local(BaseModel):
         type: parser.CType
+
+
+class StaticInit(BaseModel):
+    val: int | float
+
+    @classmethod
+    def from_declaration(cls, decl: parser.Variable_Declaration, *, mutate: bool):
+        with pf.set_context(lexer.CURRENT_LOCATION, decl.location):
+            val = (
+                decl.init.get_const_expression(
+                    cast_to=decl.type.get_trivial(), mutate=mutate
+                )
+                if decl.init
+                else 0
+            )
+            return cls(val=val)
 
 
 class Label_Map(BaseModel):
@@ -267,7 +266,7 @@ class Label_Map(BaseModel):
         return self.data.get(name)
 
     def get_new_name(self, original: str):
-        new_name = _get_new_name(original)
+        new_name = get_new_name(original)
         self.data[original] = new_name
 
         return new_name
@@ -617,7 +616,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
         case parser.For(init=init, condition=condition, post=post, body=body):
             with (
                 Identifier_Table.new_scope(),
-                pf.set_context(LOOP_CONTROL_LABEL, _get_new_name("for_label")),
+                pf.set_context(LOOP_CONTROL_LABEL, get_new_name("for_label")),
                 pf.set_context(MOST_RECENT_CONTROL_LABEL, LOOP_CONTROL_LABEL),
             ):
                 init = resolve_for_init(init)
@@ -639,7 +638,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
         ):
             with (
                 Identifier_Table.new_scope(),
-                pf.set_context(LOOP_CONTROL_LABEL, _get_new_name("while_label")),
+                pf.set_context(LOOP_CONTROL_LABEL, get_new_name("while_label")),
                 pf.set_context(MOST_RECENT_CONTROL_LABEL, LOOP_CONTROL_LABEL),
             ):
                 condition = resolve_expression(condition)
@@ -687,7 +686,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
             )
 
         case parser.Switch(checker=checker, body=body):
-            switch_label = _get_new_name("switch_label")
+            switch_label = get_new_name("switch_label")
             with (
                 pf.set_context(SWITCH_CONTROL_LABEL, switch_label),
                 pf.set_context(MOST_RECENT_CONTROL_LABEL, SWITCH_CONTROL_LABEL),
@@ -724,7 +723,7 @@ def resolve_statement(stmt: parser.Statement) -> parser.Statement:
                 type=type,
                 body=body,
                 control_label=control_label,
-                label=parser.Identifier(_get_new_name("case")),
+                label=parser.Identifier(get_new_name("case")),
             )
             return parser.Statement(root=resolved)
 
@@ -825,10 +824,11 @@ def resolve_identifier(
     return parser.Identifier(root=resolved_name)
 
 
-@set_new_loc
 def resolve_factor(
     factor: parser.Expression.FactorSubType,
 ) -> parser.Expression.FactorSubType:
+    # We can't use the decorator because pyright gets very confused
+    _ = lexer.CURRENT_LOCATION.set(factor.location)
     match factor:
         case parser.Cast(target_type=target_type, exp=exp):
             # It feels really weird that we're checking here
@@ -847,6 +847,8 @@ def resolve_factor(
         case parser.Unary(op=op, exp=exp, pre=pre):
             if op not in ("++", "--"):
                 inner = resolve_expression(exp)
+                if op == "NOT":
+                    inner = _convert_to(inner, parser.CType(root="int"))
                 return parser.Unary(
                     op=op,
                     exp=inner,
@@ -1029,9 +1031,7 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
                 )
 
         case "static":
-            initial_value = Symbol_Table.Static.StaticInit.from_declaration(
-                decl, mutate=False
-            )
+            initial_value = StaticInit.from_declaration(decl, mutate=False)
 
             symbol_table.assert_declaration_has_type_match(decl)
 
@@ -1059,7 +1059,7 @@ def type_check_local_variable_declaration(decl: parser.Variable_Declaration):
 
 
 def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration):
-    initial_value: t.Literal["tentative", "Nope!"] | Symbol_Table.Static.StaticInit
+    initial_value: t.Literal["tentative", "Nope!"] | StaticInit
     symbol_table = SYMBOL_TABLE.get()
 
     def nope(s: str):
@@ -1073,9 +1073,7 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
         case parser.Expression(), "extern":
             raise nope("This should have been caught earlier no?")
         case parser.Expression(), _:
-            initial_value = Symbol_Table.Static.StaticInit.from_declaration(
-                decl, mutate=True
-            )
+            initial_value = StaticInit.from_declaration(decl, mutate=True)
 
     is_global = decl.storage != "static"
 
@@ -1117,19 +1115,19 @@ def type_check_file_scope_variable_declaration(decl: parser.Variable_Declaration
 
         # JANK ALERT
         match old.initial_value, initial_value:
-            case Symbol_Table.Static.StaticInit(), Symbol_Table.Static.StaticInit():
+            case StaticInit(), StaticInit():
                 raise nope(f"Conflict! Double declaration of '{decl.name.root}'")
-            case Symbol_Table.Static.StaticInit(), _:
+            case StaticInit(), _:
                 # perfectly valid...still jank
                 initial_value = old.initial_value
             case "tentative", "Nope" | "tentative":
                 initial_value = "tentative"
-            case "Nope!", Symbol_Table.Static.StaticInit() | "tentative" | "Nope!":
+            case "Nope!", StaticInit() | "tentative" | "Nope!":
                 # Valid
                 # `extern int a;...int a = 3;`
                 # We can redeclare it or assign it or whatever. Really weird
                 pass
-            case "tentative", "Nope!" | Symbol_Table.Static.StaticInit():
+            case "tentative", "Nope!" | StaticInit():
                 # Valid
                 # `int a;extern int a; int a = 3;`
                 pass
@@ -1226,6 +1224,7 @@ def type_check_expression(exp: parser.Expression):
             exp.type = inner.type
             if op == "NOT":
                 exp.type = parser.CType(root="int")
+                inner.type = parser.CType(root="int")
         case parser.Conditional(left=left, middle=middle, right=right):
             for sub in (left, middle, right):
                 type_check_expression(sub)
@@ -1328,6 +1327,8 @@ def type_check_statement(stmt: parser.Statement):
             type_check_statement(body)
         case parser.IfStatement(condition=condition, then=then, else_s=else_s):
             type_check_expression(condition)
+            # Convert it into an int (just in case)
+            stmt.root.condition = _convert_to(condition, parser.CType(root="int"))
             type_check_statement(then)
             if else_s:
                 type_check_statement(else_s)
@@ -1427,12 +1428,12 @@ def _get_common_type(left: parser.CType | None, right: parser.CType | None):
     return right
 
 
-def _get_new_name(original: str):
+def get_new_name(original: str):
     global Global_Counter
     # Note: We ensure that the new name is not valid-c
     # Otherwise the variables `int a, a1` could both be renamed to
     # `a12`
-    new_name = f"{original}`{Global_Counter}"
+    new_name = f"{original}`_var_number_{Global_Counter}"
     Global_Counter += 1
     Label_Map.OG_NAMES[new_name] = original
     return new_name

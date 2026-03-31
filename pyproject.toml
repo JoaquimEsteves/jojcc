@@ -25,6 +25,7 @@ dependencies = [
     "chapter11",
     "chapter12",
     "chapter13",
+    "pyinstrument>=5.1.2",
 ]
 
 [project.optional-dependencies]

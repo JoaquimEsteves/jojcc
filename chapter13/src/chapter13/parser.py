@@ -364,13 +364,13 @@ class Labelled_Construct(HasLoc):
 class Break(Labelled_Construct):
     @t.override
     def __str__(self):
-        return f"(break {self.control_label if self.control_label else ''})"
+        return f"(break {self.control_label})"
 
 
 class Continue(Labelled_Construct):
     @t.override
     def __str__(self):
-        return f"(continue {self.control_label if self.control_label else ''})"
+        return f"(continue {self.control_label})"
 
 
 class While(Labelled_Construct):
@@ -379,9 +379,7 @@ class While(Labelled_Construct):
 
     @t.override
     def __str__(self):
-        res = [
-            f"(while {self.control_label if self.control_label else ''} {self.condition}"
-        ]  # )
+        res = [f"(while {self.control_label} {self.condition}"]  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             res.append(pf.indent(str(self.body)) + ")")
@@ -396,7 +394,7 @@ class DoWhile(While):
 
     @t.override
     def __str__(self):
-        res = [f"(do {self.control_label if self.control_label else ''}"]  # )
+        res = [f"(do {self.control_label}"]  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             res.append(pf.indent(str(self.body)))
@@ -420,7 +418,7 @@ class For(Labelled_Construct):
 
     @t.override
     def __str__(self):
-        res = f"(for {self.control_label if self.control_label else ''}\n"  # )
+        res = f"(for {self.control_label}\n"  # )
 
         with pf.set_context(dt.INDENT_LEVEL, 1):
             start = pf.indent(
@@ -540,18 +538,22 @@ class CType(BaseModel):
 
     def is_signed(self: CType):
         assert self.is_trivial()
+        # Erm - this one is tricky.
+        # Doubles _are_ signed, but they're not the same as the others
         return self.root in ("int", "long", "double")
 
     def get_trivial(self) -> Trivial_SubType:
         _ = self.assert_is_trivial(self)
         return self.root  # pyright: ignore[reportReturnType]
 
-    def get_size(self) -> dt.x64.Bit_Size:
+    def get_size(self) -> dt.x64.Bit_Size | t.Literal[128]:
         match self.root:
             case "int" | "uint":
                 return 32
-            case "long" | "ulong" | "double":
+            case "long" | "ulong":
                 return 64
+            case "double":
+                return 128
             case CType.FuncType():
                 raise ValueError("WE DON'T DO FUNCTION POINTERS YET")
 
@@ -914,7 +916,7 @@ class Expression(Typed, HasLoc):
         return cast_val(get_val())
 
     @staticmethod
-    def from_constant(const: int, ctype: TrivialType):
+    def from_constant(const: int | float, ctype: TrivialType):
         return Expression(
             root=Constant(root=const, ctype=ctype),
             type=ctype,
@@ -1144,7 +1146,7 @@ class Constant(HasLoc):
         recursion_limit = 0
         if self.ctype.is_signed():
             # shit...make sure we print them as negatives!
-            size = self.ctype.get_size()
+            size: dt.x64.Bit_Size = self.ctype.get_size()  # pyright: ignore[reportAssignmentType]
             while val > dt.x64.max[size]:
                 val -= dt.x64.umax[size] + 1
                 recursion_limit += 1
@@ -1616,9 +1618,7 @@ class SwitchCase(Labelled_Construct):
     def __str__(self):
         with pf.set_context(dt.INDENT_LEVEL, 1):
             body = pf.indent(str(self.body))
-        return (
-            f"({self.type} {self.control_label if self.control_label else ''} \n{body})"
-        )
+        return f"({self.type} {self.control_label} \n{body})"
 
     @staticmethod
     def from_tokens(tokens: lexer.Lexed) -> tuple[SwitchCase, lexer.Lexed]:

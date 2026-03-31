@@ -93,6 +93,10 @@ New_School_Registers = t.Literal[
 
 @t.final
 class x64:
+    """
+    Note: This is only for general-purpose registers.
+    """
+
     type Register = (
         Oldest_School_Registers | Old_School_Registers | New_School_Registers
     )
